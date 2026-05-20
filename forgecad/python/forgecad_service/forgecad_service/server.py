@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Empty
@@ -42,6 +44,22 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         try:
+            parsed_url = urlparse(self.path)
+            path = parsed_url.path.rstrip("/") or "/"
+            query = parse_qs(parsed_url.query)
+            if not self._is_authorized(method, path, query):
+                self._send_json(
+                    {
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "ForgeCAD service token is missing or invalid",
+                            "details": {},
+                            "recoverable": False,
+                        }
+                    },
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
+                return
             result = self._dispatch(method)
             self._send_json(result)
         except ForgeCADError as exc:
@@ -273,9 +291,44 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _send_cors_headers(self) -> None:
-        self.send_header("access-control-allow-origin", "*")
+        origin = self.headers.get("origin")
+        if origin and self._is_allowed_origin(origin):
+            self.send_header("access-control-allow-origin", origin)
+            self.send_header("vary", "Origin")
         self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
-        self.send_header("access-control-allow-headers", "content-type")
+        self.send_header("access-control-allow-headers", "content-type,x-forgecad-token")
+
+    def _is_public_request(
+        self,
+        method: str,
+        path: str,
+    ) -> bool:
+        return method == "GET" and path == "/health"
+
+    def _is_authorized(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, list[str]],
+    ) -> bool:
+        token = getattr(self.server, "auth_token", None)
+        if not token or self._is_public_request(method, path):
+            return True
+        provided = self.headers.get("x-forgecad-token")
+        if provided is None:
+            values = query.get("token")
+            provided = values[0] if values else None
+        if provided is None:
+            return False
+        return hmac.compare_digest(provided, token)
+
+    def _is_allowed_origin(self, origin: str) -> bool:
+        if origin.startswith("vscode-webview://"):
+            return True
+        if origin.startswith("https://") and origin.endswith(".vscode-cdn.net"):
+            return True
+        allowed_origins = getattr(self.server, "cors_origins", set())
+        return origin in allowed_origins
 
     def _is_events_websocket(self) -> bool:
         path = urlparse(self.path).path.rstrip("/") or "/"
@@ -285,6 +338,23 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _handle_events_websocket(self) -> None:
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path.rstrip("/") or "/"
+        query = parse_qs(parsed_url.query)
+        if not self._is_authorized("GET", path, query):
+            self._send_json(
+                {
+                    "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "ForgeCAD service token is missing or invalid",
+                        "details": {},
+                        "recoverable": False,
+                    }
+                },
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return
+
         key = self.headers.get("sec-websocket-key")
         if not key:
             self._send_json(
@@ -354,6 +424,8 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 0,
     quiet: bool = False,
+    auth_token: str | None = None,
+    cors_origins: list[str] | None = None,
 ) -> ThreadingHTTPServer:
     class Handler(ForgeCADRequestHandler):
         pass
@@ -361,6 +433,8 @@ def create_server(
     Handler.service = service
     server = ThreadingHTTPServer((host, port), Handler)
     server.quiet = quiet  # type: ignore[attr-defined]
+    server.auth_token = auth_token  # type: ignore[attr-defined]
+    server.cors_origins = set(cors_origins or [])  # type: ignore[attr-defined]
     return server
 
 
@@ -369,10 +443,28 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--auth-token",
+        default=os.environ.get("FORGECAD_SERVICE_TOKEN"),
+        help="Optional token required for non-health API requests",
+    )
+    parser.add_argument(
+        "--cors-origin",
+        action="append",
+        default=[],
+        help="Additional allowed browser origin. VS Code WebView origins are always allowed.",
+    )
     args = parser.parse_args(argv)
 
     service = ForgeCADService()
-    server = create_server(service, host=args.host, port=args.port, quiet=args.quiet)
+    server = create_server(
+        service,
+        host=args.host,
+        port=args.port,
+        quiet=args.quiet,
+        auth_token=args.auth_token,
+        cors_origins=args.cors_origin,
+    )
     address = server.server_address
     print(f"ForgeCAD service listening on http://{address[0]}:{address[1]}", flush=True)
     try:

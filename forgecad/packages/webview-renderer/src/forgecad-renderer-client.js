@@ -15,6 +15,7 @@ export class ForgeCADRendererClient {
     this.adapter = options.adapter || new DomStatusRenderer(options.mount);
     this.fetchImpl = options.fetchImpl || window.fetch.bind(window);
     this.websocketFactory = options.websocketFactory || ((url) => new WebSocket(url));
+    this.authToken = options.authToken || null;
     this.logger = options.logger || console;
     this.currentModelId = null;
     this.currentRevisionId = null;
@@ -85,6 +86,9 @@ export class ForgeCADRendererClient {
     const url = new URL(this.serviceBaseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/events";
+    if (this.authToken) {
+      url.searchParams.set("token", this.authToken);
+    }
     this.websocket = this.websocketFactory(url.toString());
     this.websocket.addEventListener("message", (event) => {
       this.handleEvent(JSON.parse(event.data)).catch((error) => {
@@ -228,17 +232,29 @@ export class ForgeCADRendererClient {
   }
 
   async get(path) {
-    const response = await this.fetchImpl(this.serviceBaseUrl + path);
+    const response = await this.fetchImpl(this.serviceBaseUrl + path, {
+      headers: this.requestHeaders()
+    });
     return readResponse(response);
   }
 
   async post(path, body) {
     const response = await this.fetchImpl(this.serviceBaseUrl + path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.requestHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(body)
     });
     return readResponse(response);
+  }
+
+  requestHeaders(headers = {}) {
+    if (!this.authToken) {
+      return headers;
+    }
+    return {
+      ...headers,
+      "x-forgecad-token": this.authToken
+    };
   }
 }
 
@@ -320,6 +336,7 @@ export function createServiceDrivenRenderer(options = {}) {
   return new ForgeCADRendererClient({
     serviceBaseUrl,
     sessionId,
+    authToken: options.authToken || params.get("token"),
     rendererId: options.rendererId || params.get("renderer"),
     adapter: options.adapter,
     mount,

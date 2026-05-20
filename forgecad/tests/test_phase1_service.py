@@ -8,6 +8,7 @@ import sys
 import threading
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -158,9 +159,38 @@ class Phase1ServiceTests(unittest.TestCase):
             )
             self.assertEqual(measurements["measurements"][0]["distance"], 2)
             self.assertTrue(_get(base + "/health")["ok"])
-            options = _options(base + "/health")
+            options = _options(base + "/health", origin="vscode-webview://forgecad")
             self.assertEqual(options["status"], 204)
-            self.assertEqual(options["headers"]["access-control-allow-origin"], "*")
+            self.assertEqual(
+                options["headers"]["access-control-allow-origin"],
+                "vscode-webview://forgecad",
+            )
+            blocked_options = _options(base + "/health", origin="https://example.com")
+            self.assertNotIn(
+                "access-control-allow-origin",
+                blocked_options["headers"],
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_service_token_blocks_unauthorized_mutations(self):
+        service = ForgeCADService()
+        server = create_server(service, port=0, quiet=True, auth_token="secret-token")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        try:
+            self.assertTrue(_get(base + "/health")["ok"])
+            denied = _post_error(base + "/sessions", {"root_path": "/tmp/blocked"})
+            self.assertEqual(denied["status"], 401)
+            session = _post(
+                base + "/sessions",
+                {"root_path": "/tmp/auth"},
+                headers={"x-forgecad-token": "secret-token"},
+            )
+            self.assertTrue(session["session_id"].startswith("session_"))
         finally:
             server.shutdown()
             server.server_close()
@@ -430,19 +460,43 @@ def _get(url: str):
         return json.loads(response.read().decode("utf-8"))
 
 
-def _post(url: str, payload: dict):
+def _post(url: str, payload: dict, headers: dict | None = None):
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers={"content-type": "application/json", **(headers or {})},
         method="POST",
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _options(url: str):
-    request = Request(url, method="OPTIONS")
+def _post_error(url: str, payload: dict, headers: dict | None = None):
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return {
+                "status": response.status,
+                "body": json.loads(response.read().decode("utf-8")),
+            }
+    except HTTPError as error:
+        try:
+            return {
+                "status": error.code,
+                "body": json.loads(error.read().decode("utf-8")),
+            }
+        finally:
+            error.close()
+
+
+def _options(url: str, origin: str | None = None):
+    headers = {"origin": origin} if origin else {}
+    request = Request(url, headers=headers, method="OPTIONS")
     with urlopen(request, timeout=5) as response:
         return {
             "status": response.status,

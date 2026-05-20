@@ -20,7 +20,18 @@
     "onCommand:forgecad.exportStl",
     "onCommand:forgecad.resetSession"
   ],
-  "main": "./src/extension.js",
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package-assets": "node scripts/sync-assets.mjs",
+    "vscode:prepublish": "npm run package-assets && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  },
   "contributes": {
     "commands": [
       {
@@ -98,6 +109,11 @@
           "type": "string",
           "default": "",
           "description": "Existing ForgeCAD service URL. Leave empty to launch a workspace-local service."
+        },
+        "forgecad.service.token": {
+          "type": "string",
+          "default": "",
+          "description": "Token for an existing ForgeCAD service configured with forgecad.service.url."
         },
         "forgecad.service.host": {
           "type": "string",

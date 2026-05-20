@@ -1,12 +1,14 @@
-"use strict";
+import * as vscode from "vscode";
+import { ForgeCADServiceManager } from "./serviceManager";
+import type { ForgeCADStatus } from "./types";
 
-const path = require("path");
-const vscode = require("vscode");
+export class ForgeCADViewerPanel {
+  static currentPanel: ForgeCADViewerPanel | null = null;
 
-class ForgeCADViewerPanel {
-  static currentPanel = null;
-
-  static async open(context, serviceManager) {
+  static async open(
+    context: vscode.ExtensionContext,
+    serviceManager: ForgeCADServiceManager
+  ): Promise<ForgeCADViewerPanel> {
     const status = await serviceManager.startOrConnect();
     if (!status.baseUrl || !status.sessionId) {
       throw new Error("ForgeCAD service did not provide an endpoint and session.");
@@ -18,9 +20,7 @@ class ForgeCADViewerPanel {
       return ForgeCADViewerPanel.currentPanel;
     }
 
-    const rendererRoot = vscode.Uri.file(
-      path.resolve(context.extensionPath, "..", "..", "packages", "webview-renderer")
-    );
+    const rendererRoot = vscode.Uri.file(serviceManager.assetRoots().rendererPath);
     const panel = vscode.window.createWebviewPanel(
       "forgecadViewer",
       "ForgeCAD Viewer",
@@ -43,17 +43,19 @@ class ForgeCADViewerPanel {
     return instance;
   }
 
-  constructor(context, panel, rendererRoot) {
-    this.context = context;
-    this.panel = panel;
-    this.rendererRoot = rendererRoot;
+  private constructor(
+    private readonly context: vscode.ExtensionContext,
+    readonly panel: vscode.WebviewPanel,
+    private readonly rendererRoot: vscode.Uri
+  ) {
+    void this.context;
   }
 
-  async update(status) {
+  async update(status: ForgeCADStatus): Promise<void> {
     this.panel.webview.html = this.html(status);
   }
 
-  html(status) {
+  html(status: ForgeCADStatus): string {
     const nonce = randomNonce();
     const webview = this.panel.webview;
     const scriptUri = webview.asWebviewUri(
@@ -61,6 +63,7 @@ class ForgeCADViewerPanel {
     );
     const serviceBaseUrl = JSON.stringify(status.baseUrl);
     const sessionId = JSON.stringify(status.sessionId);
+    const authToken = JSON.stringify(status.authToken);
     const connectSrc = connectSources(status.baseUrl).join(" ");
     const csp = [
       "default-src 'none'",
@@ -109,6 +112,7 @@ class ForgeCADViewerPanel {
       const renderer = createServiceDrivenRenderer({
         serviceBaseUrl: ${serviceBaseUrl},
         sessionId: ${sessionId},
+        authToken: ${authToken},
         mount: document.getElementById("cad_viewer")
       });
       renderer.start().catch((error) => {
@@ -120,7 +124,7 @@ class ForgeCADViewerPanel {
   }
 }
 
-function randomNonce() {
+function randomNonce(): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let value = "";
   for (let index = 0; index < 32; index += 1) {
@@ -129,7 +133,7 @@ function randomNonce() {
   return value;
 }
 
-function escapeHtml(value) {
+function escapeHtml(value: unknown): string {
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -137,7 +141,7 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function connectSources(baseUrl) {
+function connectSources(baseUrl: string | null): string[] {
   const sources = [
     "http://127.0.0.1:*",
     "ws://127.0.0.1:*",
@@ -145,7 +149,7 @@ function connectSources(baseUrl) {
     "ws://localhost:*"
   ];
   try {
-    const url = new URL(baseUrl);
+    const url = new URL(baseUrl || "");
     sources.push(url.origin);
     if (url.protocol === "https:") {
       sources.push(`wss://${url.host}`);
@@ -157,7 +161,3 @@ function connectSources(baseUrl) {
   }
   return Array.from(new Set(sources));
 }
-
-module.exports = {
-  ForgeCADViewerPanel
-};

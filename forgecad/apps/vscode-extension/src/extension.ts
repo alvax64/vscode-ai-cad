@@ -1,13 +1,12 @@
-"use strict";
+import * as path from "path";
+import * as vscode from "vscode";
+import { createOutput } from "./output";
+import { ForgeCADServiceManager } from "./serviceManager";
+import { ForgeCADStatusProvider } from "./statusProvider";
+import { ForgeCADViewerPanel } from "./viewerPanel";
+import type { ForgeCADRevision, Output } from "./types";
 
-const path = require("path");
-const vscode = require("vscode");
-const { createOutput } = require("./output");
-const { ForgeCADServiceManager } = require("./serviceManager");
-const { ForgeCADStatusProvider } = require("./statusProvider");
-const { ForgeCADViewerPanel } = require("./viewerPanel");
-
-async function activate(context) {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = createOutput();
   const serviceManager = new ForgeCADServiceManager(context, output);
   const statusProvider = new ForgeCADStatusProvider(serviceManager);
@@ -17,7 +16,7 @@ async function activate(context) {
   statusBar.tooltip = "ForgeCAD service status";
   statusBar.show();
 
-  async function refreshStatusBar() {
+  async function refreshStatusBar(): Promise<void> {
     const status = await serviceManager.getStatus();
     statusBar.text =
       status.mode === "stopped"
@@ -30,10 +29,10 @@ async function activate(context) {
   }
 
   const statusSubscription = serviceManager.onDidChangeStatus(() => {
-    refreshStatusBar().catch((error) => output.warn(error.message));
+    refreshStatusBar().catch((error: unknown) => output.warn(errorMessage(error)));
   });
   const trustSubscription = vscode.workspace.onDidGrantWorkspaceTrust(() => {
-    refreshStatusBar().catch((error) => output.warn(error.message));
+    refreshStatusBar().catch((error: unknown) => output.warn(errorMessage(error)));
   });
 
   context.subscriptions.push(
@@ -87,9 +86,7 @@ async function activate(context) {
         }
         const result = await serviceManager.exportCurrentStl(target.fsPath);
         await refreshStatusBar();
-        vscode.window.showInformationMessage(
-          `Exported STL: ${result.export.output_path}`
-        );
+        vscode.window.showInformationMessage(`Exported STL: ${result.export.output_path}`);
       })
     ),
     vscode.commands.registerCommand("forgecad.showStatus", () =>
@@ -105,7 +102,8 @@ async function activate(context) {
         const status = await serviceManager.startOrConnect();
         const payload = {
           service: status.baseUrl,
-          session_id: status.sessionId
+          session_id: status.sessionId,
+          token: status.authToken
         };
         await vscode.env.clipboard.writeText(JSON.stringify(payload));
         vscode.window.showInformationMessage("ForgeCAD service endpoint copied.");
@@ -131,27 +129,27 @@ async function activate(context) {
   );
 
   await refreshStatusBar();
-  if (vscode.workspace.getConfiguration("forgecad").get("service.autostart", false)) {
-    run(output, async () => {
+  if (vscode.workspace.getConfiguration("forgecad").get<boolean>("service.autostart", false)) {
+    void run(output, async () => {
       await serviceManager.startOrConnect();
       await refreshStatusBar();
-      if (vscode.workspace.getConfiguration("forgecad").get("viewer.openOnStart", false)) {
+      if (vscode.workspace.getConfiguration("forgecad").get<boolean>("viewer.openOnStart", false)) {
         await ForgeCADViewerPanel.open(context, serviceManager);
       }
     });
   }
 }
 
-async function run(output, task) {
+async function run(output: Output, task: () => Promise<void>): Promise<void> {
   try {
     await task();
   } catch (error) {
-    output.error(error.stack || error.message);
-    vscode.window.showErrorMessage(`ForgeCAD: ${error.message}`);
+    output.error(error instanceof Error && error.stack ? error.stack : errorMessage(error));
+    vscode.window.showErrorMessage(`ForgeCAD: ${errorMessage(error)}`);
   }
 }
 
-function defaultExportUri() {
+function defaultExportUri(): vscode.Uri | undefined {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri;
   if (!root) {
     return undefined;
@@ -159,9 +157,12 @@ function defaultExportUri() {
   return vscode.Uri.joinPath(root, "forgecad-export.stl");
 }
 
-function sourcePathFromRevision(revision, workspaceRoot) {
+function sourcePathFromRevision(
+  revision: ForgeCADRevision | null,
+  workspaceRoot: string | null
+): string | null {
   const sourceRef = revision?.source_ref || {};
-  const candidate = sourceRef.path || sourceRef.file || sourceRef.filename;
+  const candidate = stringField(sourceRef, "path") || stringField(sourceRef, "file") || stringField(sourceRef, "filename");
   if (!candidate) {
     return null;
   }
@@ -171,9 +172,13 @@ function sourcePathFromRevision(revision, workspaceRoot) {
   return workspaceRoot ? path.join(workspaceRoot, candidate) : path.resolve(candidate);
 }
 
-function deactivate() {}
+function stringField(sourceRef: Record<string, unknown>, key: string): string | null {
+  const value = sourceRef[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
 
-module.exports = {
-  activate,
-  deactivate
-};
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function deactivate(): void {}

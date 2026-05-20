@@ -30,6 +30,8 @@ Phase 3 adds the VS Code client:
 - Show service, session, model, and dependency status.
 - Export the active service-owned revision as STL.
 - Copy the service/session endpoint for MCP clients.
+- Launch the local service with a per-process token and pass that token only to
+  VS Code clients that need it.
 
 The service is designed to degrade cleanly when CAD dependencies are not
 installed. In that case, session and accepted-model APIs still work, while
@@ -123,21 +125,31 @@ Production VS Code integration should provide an adapter backed by
 `apps/vscode-extension` is the Phase 3 extension rebuild. It is intentionally a
 client of the shared service:
 
-- `src/serviceManager.js` starts or connects to the Python service and owns the
+- `src/serviceManager.ts` starts or connects to the Python service and owns the
   local process lifecycle.
-- `src/serviceClient.js` is a small HTTP client for the service API.
-- `src/viewerPanel.js` hosts the browser renderer in a VS Code WebView.
-- `src/statusProvider.js` shows service/session/model state in the ForgeCAD
+- `src/serviceClient.ts` is a small HTTP client for the service API.
+- `src/viewerPanel.ts` hosts the browser renderer in a VS Code WebView.
+- `src/statusProvider.ts` shows service/session/model state in the ForgeCAD
   activity view.
 
 The extension starts the local service only in trusted workspaces. It forwards
 workspace trust through environment variables and blocks STL export in
 untrusted workspaces.
 
+For installed extension builds, run `npm run package-assets` from
+`apps/vscode-extension` before packaging. That copies the Python service/core
+packages and WebView renderer under the extension's `vendor/` directory. During
+development, the extension falls back to the monorepo layout when `vendor/` is
+not present.
+
+The service no longer emits wildcard CORS headers. Browser origins must be VS
+Code WebView origins or explicitly configured with `--cors-origin`, and
+extension-launched services require `x-forgecad-token` for non-health API calls.
+
 ## Local Verification
 
 ```bash
 python -m unittest discover -s forgecad/tests -p 'test_*.py' -v
 PYTHONPATH=forgecad/python/forgecad_core:forgecad/python/forgecad_service python -m forgecad_service --help
-node --check forgecad/apps/vscode-extension/src/extension.js
+npm --prefix forgecad/apps/vscode-extension run compile
 ```

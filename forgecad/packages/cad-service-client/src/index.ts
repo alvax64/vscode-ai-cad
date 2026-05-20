@@ -20,15 +20,18 @@ export type ForgeCADRenderCommand = {
 
 export type ForgeCADServiceClientOptions = {
   baseUrl: string;
+  authToken?: string;
   fetchImpl?: typeof fetch;
 };
 
 export class ForgeCADServiceClient {
   readonly baseUrl: string;
+  private readonly authToken: string | undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: ForgeCADServiceClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.authToken = options.authToken;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -94,21 +97,36 @@ export class ForgeCADServiceClient {
     const url = new URL(this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/events";
+    if (this.authToken) {
+      url.searchParams.set("token", this.authToken);
+    }
     return url.toString();
   }
 
   private async get(path: string) {
-    const response = await this.fetchImpl(this.baseUrl + path);
+    const response = await this.fetchImpl(this.baseUrl + path, {
+      headers: this.requestHeaders(),
+    });
     return this.readResponse(response);
   }
 
   private async post(path: string, body: unknown) {
     const response = await this.fetchImpl(this.baseUrl + path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.requestHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(body),
     });
     return this.readResponse(response);
+  }
+
+  private requestHeaders(headers: Record<string, string> = {}) {
+    if (!this.authToken) {
+      return headers;
+    }
+    return {
+      ...headers,
+      "x-forgecad-token": this.authToken,
+    };
   }
 
   private async readResponse(response: Response) {

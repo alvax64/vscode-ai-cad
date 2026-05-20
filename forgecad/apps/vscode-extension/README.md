@@ -16,8 +16,8 @@ metadata, revisions, tessellation, or exports.
 ## Development
 
 Open this folder as a VS Code extension project or run an extension host with
-`forgecad/apps/vscode-extension` as the extension root. The extension expects
-the monorepo layout:
+`forgecad/apps/vscode-extension` as the extension root. In development, the
+extension can resolve assets from the monorepo layout:
 
 ```text
 forgecad/
@@ -31,7 +31,20 @@ The local service launcher sets `PYTHONPATH` to the two Python package folders
 above and runs:
 
 ```bash
-python3 -m forgecad_service --host 127.0.0.1 --port 0 --quiet
+python3 -m forgecad_service --host 127.0.0.1 --port 0 --quiet --auth-token <random-token>
 ```
 
-Set `forgecad.service.url` to use an already-running service instead.
+For VSIX/package builds, run:
+
+```bash
+npm install
+npm run package-assets
+npm run compile
+```
+
+`package-assets` copies the Python service/core packages and WebView renderer
+under `vendor/`, so the installed extension does not depend on sibling
+monorepo folders.
+
+Set `forgecad.service.url` and `forgecad.service.token` to use an already-running
+service instead.
