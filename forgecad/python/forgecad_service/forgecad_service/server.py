@@ -34,6 +34,12 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # pylint: disable=invalid-name
         self._handle("POST")
 
+    def do_OPTIONS(self) -> None:  # pylint: disable=invalid-name
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._send_cors_headers()
+        self.send_header("content-length", "0")
+        self.end_headers()
+
     def _handle(self, method: str) -> None:
         try:
             result = self._dispatch(method)
@@ -261,9 +267,15 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         )
         self.send_response(status)
         self.send_header("content-type", "application/json")
+        self._send_cors_headers()
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_cors_headers(self) -> None:
+        self.send_header("access-control-allow-origin", "*")
+        self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
+        self.send_header("access-control-allow-headers", "content-type")
 
     def _is_events_websocket(self) -> bool:
         path = urlparse(self.path).path.rstrip("/") or "/"

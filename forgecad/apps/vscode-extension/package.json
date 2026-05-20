@@ -1,0 +1,130 @@
+{
+  "name": "forgecad-vscode-extension",
+  "displayName": "ForgeCAD",
+  "description": "VS Code client for the ForgeCAD shared CAD service.",
+  "version": "0.1.0",
+  "publisher": "forgecad",
+  "private": true,
+  "license": "TBD",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:forgecad.startService",
+    "onCommand:forgecad.stopService",
+    "onCommand:forgecad.openViewer",
+    "onCommand:forgecad.exportStl",
+    "onCommand:forgecad.resetSession"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "forgecad.startService",
+        "title": "ForgeCAD: Start CAD Service"
+      },
+      {
+        "command": "forgecad.stopService",
+        "title": "ForgeCAD: Stop CAD Service"
+      },
+      {
+        "command": "forgecad.openViewer",
+        "title": "ForgeCAD: Open Viewer"
+      },
+      {
+        "command": "forgecad.exportStl",
+        "title": "ForgeCAD: Export Active Model as STL"
+      },
+      {
+        "command": "forgecad.resetSession",
+        "title": "ForgeCAD: Reset Workspace Session"
+      },
+      {
+        "command": "forgecad.showStatus",
+        "title": "ForgeCAD: Show Service Status"
+      },
+      {
+        "command": "forgecad.copyMcpServiceEndpoint",
+        "title": "ForgeCAD: Copy Service Endpoint for MCP"
+      },
+      {
+        "command": "forgecad.openActiveModelSource",
+        "title": "ForgeCAD: Open Active Model Source"
+      },
+      {
+        "command": "forgecad.refreshStatus",
+        "title": "ForgeCAD: Refresh Status"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "forgecad",
+          "title": "ForgeCAD",
+          "icon": "resources/forgecad-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "forgecad": [
+        {
+          "id": "forgecadStatus",
+          "name": "Service"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "forgecad.refreshStatus",
+          "when": "view == forgecadStatus",
+          "group": "navigation@1"
+        },
+        {
+          "command": "forgecad.openViewer",
+          "when": "view == forgecadStatus",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ForgeCAD",
+      "properties": {
+        "forgecad.service.url": {
+          "type": "string",
+          "default": "",
+          "description": "Existing ForgeCAD service URL. Leave empty to launch a workspace-local service."
+        },
+        "forgecad.service.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host for the workspace-local ForgeCAD service."
+        },
+        "forgecad.service.port": {
+          "type": "integer",
+          "default": 0,
+          "description": "Port for the workspace-local ForgeCAD service. Use 0 to choose a free port."
+        },
+        "forgecad.service.autostart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start or connect to the ForgeCAD service when VS Code starts."
+        },
+        "forgecad.viewer.openOnStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the ForgeCAD viewer after autostarting the service."
+        },
+        "forgecad.python.path": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter used to launch the workspace-local ForgeCAD service."
+        }
+      }
+    }
+  }
+}

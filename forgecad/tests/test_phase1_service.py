@@ -158,6 +158,9 @@ class Phase1ServiceTests(unittest.TestCase):
             )
             self.assertEqual(measurements["measurements"][0]["distance"], 2)
             self.assertTrue(_get(base + "/health")["ok"])
+            options = _options(base + "/health")
+            self.assertEqual(options["status"], 204)
+            self.assertEqual(options["headers"]["access-control-allow-origin"], "*")
         finally:
             server.shutdown()
             server.server_close()
@@ -436,6 +439,15 @@ def _post(url: str, payload: dict):
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _options(url: str):
+    request = Request(url, method="OPTIONS")
+    with urlopen(request, timeout=5) as response:
+        return {
+            "status": response.status,
+            "headers": {key.lower(): value for key, value in response.headers.items()},
+        }
 
 
 def _open_events_websocket(port: int) -> socket.socket:

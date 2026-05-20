@@ -22,6 +22,15 @@ Phase 2 adds a service-driven renderer client boundary:
 - Render commands are queued as `view.command` service events over `WS /events`.
 - Renderers report view state and captures back to the service.
 
+Phase 3 adds the VS Code client:
+
+- Launch or discover the shared CAD service.
+- Create/reset workspace sessions.
+- Host the service-driven WebView renderer.
+- Show service, session, model, and dependency status.
+- Export the active service-owned revision as STL.
+- Copy the service/session endpoint for MCP clients.
+
 The service is designed to degrade cleanly when CAD dependencies are not
 installed. In that case, session and accepted-model APIs still work, while
 geometry operations return structured dependency errors.
@@ -30,6 +39,8 @@ geometry operations return structured dependency errors.
 
 ```text
 forgecad/
+  apps/
+    vscode-extension/
   python/
     forgecad_core/
     forgecad_service/
@@ -107,9 +118,26 @@ The fallback DOM renderer is dependency-free and only validates the protocol.
 Production VS Code integration should provide an adapter backed by
 `three-cad-viewer`.
 
+## VS Code Client
+
+`apps/vscode-extension` is the Phase 3 extension rebuild. It is intentionally a
+client of the shared service:
+
+- `src/serviceManager.js` starts or connects to the Python service and owns the
+  local process lifecycle.
+- `src/serviceClient.js` is a small HTTP client for the service API.
+- `src/viewerPanel.js` hosts the browser renderer in a VS Code WebView.
+- `src/statusProvider.js` shows service/session/model state in the ForgeCAD
+  activity view.
+
+The extension starts the local service only in trusted workspaces. It forwards
+workspace trust through environment variables and blocks STL export in
+untrusted workspaces.
+
 ## Local Verification
 
 ```bash
 python -m unittest discover -s forgecad/tests -p 'test_*.py' -v
 PYTHONPATH=forgecad/python/forgecad_core:forgecad/python/forgecad_service python -m forgecad_service --help
+node --check forgecad/apps/vscode-extension/src/extension.js
 ```
