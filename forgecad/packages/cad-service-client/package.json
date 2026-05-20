@@ -1,0 +1,10 @@
+{
+  "name": "@forgecad/cad-service-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript client for the ForgeCAD shared CAD service.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

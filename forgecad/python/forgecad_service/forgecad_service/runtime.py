@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import math
 import os
 import traceback
 from dataclasses import dataclass
@@ -209,6 +210,183 @@ class GeometryRuntime:
                 details={"traceback": traceback.format_exc()},
                 recoverable=True,
             ) from exc
+
+    def measure(
+        self,
+        obj: Any,
+        measurements: list[dict[str, Any]],
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        metadata = metadata or {}
+        results = [
+            self._measure_one(obj, measurement, metadata=metadata)
+            for measurement in measurements
+        ]
+        return {"results": results}
+
+    def _measure_one(
+        self,
+        obj: Any,
+        measurement: dict[str, Any],
+        *,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        mtype = measurement.get("type", "bounding_box")
+        try:
+            if mtype == "bounding_box":
+                return self._measure_bounding_box(metadata)
+            if mtype in ("point_distance", "distance_between_points"):
+                return self._measure_point_distance(measurement)
+            if mtype in ("vector_angle", "angle_between_vectors"):
+                return self._measure_vector_angle(measurement)
+            if mtype in ("shape_properties", "properties"):
+                return self._measure_shape_properties(obj)
+            if mtype in ("shape_distance", "distance"):
+                return self._measure_shape_distance(obj, measurement)
+        except ForgeCADError as exc:
+            return {
+                "type": mtype,
+                "error": exc.to_dict()["error"],
+            }
+        except Exception as exc:  # pylint: disable=broad-except
+            return {
+                "type": mtype,
+                "error": {
+                    "code": "MEASUREMENT_FAILED",
+                    "message": str(exc),
+                    "details": {"traceback": traceback.format_exc()},
+                    "recoverable": True,
+                },
+            }
+        return {
+            "type": mtype,
+            "error": {
+                "code": "MEASUREMENT_UNSUPPORTED",
+                "message": f"Unsupported Phase 1 measurement type: {mtype}",
+                "details": {"measurement": measurement},
+                "recoverable": True,
+            },
+        }
+
+    def _measure_bounding_box(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        bounding_box = metadata.get("bounding_box")
+        if not bounding_box:
+            raise ForgeCADError(
+                "MEASUREMENT_DATA_MISSING",
+                "Revision metadata does not include a bounding_box",
+                recoverable=True,
+            )
+        extents = bounding_box.get("extents")
+        diagonal = None
+        if extents is not None and len(extents) == 3:
+            diagonal = math.sqrt(sum(float(value) ** 2 for value in extents))
+        return {
+            "type": "bounding_box",
+            "bounding_box": bounding_box,
+            "diagonal": diagonal,
+        }
+
+    def _measure_point_distance(self, measurement: dict[str, Any]) -> dict[str, Any]:
+        point1 = self._point(measurement.get("point1") or measurement.get("from"))
+        point2 = self._point(measurement.get("point2") or measurement.get("to"))
+        delta = [point2[index] - point1[index] for index in range(3)]
+        return {
+            "type": "point_distance",
+            "distance": math.sqrt(sum(value * value for value in delta)),
+            "delta": [abs(value) for value in delta],
+            "point1": point1,
+            "point2": point2,
+        }
+
+    def _measure_vector_angle(self, measurement: dict[str, Any]) -> dict[str, Any]:
+        vector1 = self._point(measurement.get("vector1") or measurement.get("from"))
+        vector2 = self._point(measurement.get("vector2") or measurement.get("to"))
+        mag1 = math.sqrt(sum(value * value for value in vector1))
+        mag2 = math.sqrt(sum(value * value for value in vector2))
+        if mag1 == 0 or mag2 == 0:
+            raise ForgeCADError(
+                "MEASUREMENT_INVALID_INPUT",
+                "Vectors must be non-zero",
+                recoverable=True,
+            )
+        dot = sum(vector1[index] * vector2[index] for index in range(3))
+        cosine = max(-1.0, min(1.0, dot / (mag1 * mag2)))
+        return {
+            "type": "vector_angle",
+            "angle_degrees": math.degrees(math.acos(cosine)),
+            "vector1": vector1,
+            "vector2": vector2,
+        }
+
+    def _measure_shape_properties(self, obj: Any) -> dict[str, Any]:
+        shape = self._shape_from_object(obj)
+        if shape is None:
+            raise ForgeCADError(
+                "NO_BREP_HANDLE",
+                "This revision does not have a BRep handle available for shape properties",
+                recoverable=True,
+            )
+        try:
+            from ocp_vscode.measure import get_properties
+
+            return {"type": "shape_properties", "properties": get_properties(shape)}
+        except Exception as exc:
+            raise ForgeCADError(
+                "MEASUREMENT_FAILED",
+                str(exc),
+                details={"traceback": traceback.format_exc()},
+                recoverable=True,
+            ) from exc
+
+    def _measure_shape_distance(
+        self,
+        obj: Any,
+        measurement: dict[str, Any],
+    ) -> dict[str, Any]:
+        shape = self._shape_from_object(obj)
+        if shape is None:
+            raise ForgeCADError(
+                "NO_BREP_HANDLE",
+                "This revision does not have a BRep handle available for shape distance",
+                recoverable=True,
+            )
+        targets = measurement.get("targets") or []
+        if targets not in ([], [{"kind": "root"}, {"kind": "root"}]):
+            raise ForgeCADError(
+                "MEASUREMENT_SELECTOR_UNSUPPORTED",
+                "Phase 1 shape distance supports only the root revision shape",
+                details={"targets": targets},
+                recoverable=True,
+            )
+        try:
+            from ocp_vscode.measure import get_distance
+
+            return {
+                "type": "shape_distance",
+                "distance": get_distance(
+                    shape,
+                    shape,
+                    center=bool(measurement.get("center", False)),
+                ),
+            }
+        except Exception as exc:
+            raise ForgeCADError(
+                "MEASUREMENT_FAILED",
+                str(exc),
+                details={"traceback": traceback.format_exc()},
+                recoverable=True,
+            ) from exc
+
+    def _point(self, value: Any) -> list[float]:
+        if not isinstance(value, list | tuple) or len(value) != 3:
+            raise ForgeCADError(
+                "MEASUREMENT_INVALID_INPUT",
+                "Expected a 3D point/vector array",
+                details={"value": value},
+                recoverable=True,
+            )
+        return [float(value[0]), float(value[1]), float(value[2])]
 
     def _assembly_tree(self, assembly: Any) -> dict[str, Any]:
         def walk(node: Any, path: str) -> dict[str, Any]:

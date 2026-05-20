@@ -8,7 +8,10 @@ from typing import Any
 
 from forgecad_core.errors import ForgeCADError
 from forgecad_core.models import (
+    CaptureRecord,
     ModelRecord,
+    RenderCommandRecord,
+    RendererRecord,
     RevisionRecord,
     SessionRecord,
     utc_now_iso,
@@ -29,10 +32,16 @@ class InMemoryForgeCADStore:
         self._session_counter = count(1)
         self._model_counter = count(1)
         self._revision_counter = count(1)
+        self._renderer_counter = count(1)
+        self._render_command_counter = count(1)
+        self._capture_counter = count(1)
         self.sessions: dict[str, SessionRecord] = {}
         self.models: dict[str, ModelRecord] = {}
         self.revisions: dict[str, RevisionRecord] = {}
         self.handles: dict[str, Any] = {}
+        self.renderers: dict[str, RendererRecord] = {}
+        self.render_commands: dict[str, RenderCommandRecord] = {}
+        self.captures: dict[str, CaptureRecord] = {}
 
     def create_session(self, root_path: str | None = None) -> SessionRecord:
         if root_path is not None:
@@ -166,3 +175,238 @@ class InMemoryForgeCADStore:
             )
             data["revision"] = revision.to_dict()
         return data
+
+    def register_renderer(
+        self,
+        *,
+        session_id: str,
+        renderer_id: str | None = None,
+        capabilities: dict[str, Any] | None = None,
+        view_state: dict[str, Any] | None = None,
+    ) -> RendererRecord:
+        self.get_session(session_id)
+        if renderer_id is None:
+            renderer_id = f"renderer_{next(self._renderer_counter):06d}"
+
+        now = utc_now_iso()
+        renderer = self.renderers.get(renderer_id)
+        if renderer is None:
+            renderer = RendererRecord(
+                renderer_id=renderer_id,
+                session_id=session_id,
+                capabilities=capabilities or {},
+            )
+            self.renderers[renderer_id] = renderer
+            event_type = "renderer.attached"
+        else:
+            renderer.session_id = session_id
+            renderer.capabilities = capabilities or renderer.capabilities
+            renderer.updated_at = now
+            event_type = "renderer.updated"
+
+        if view_state is not None:
+            renderer.view_state = self._normalized_view_state(view_state)
+            renderer.updated_at = now
+
+        self.events.emit(
+            event_type,
+            session_id=session_id,
+            payload={"renderer": renderer.to_dict()},
+        )
+        return renderer
+
+    def list_renderers(self, session_id: str | None = None) -> list[RendererRecord]:
+        if session_id is None:
+            return list(self.renderers.values())
+        self.get_session(session_id)
+        return [
+            renderer
+            for renderer in self.renderers.values()
+            if renderer.session_id == session_id
+        ]
+
+    def get_renderer(self, renderer_id: str) -> RendererRecord:
+        try:
+            return self.renderers[renderer_id]
+        except KeyError as exc:
+            raise ForgeCADError(
+                "RENDERER_NOT_FOUND",
+                f"Renderer {renderer_id!r} was not found",
+                details={"renderer_id": renderer_id},
+            ) from exc
+
+    def resolve_renderer(
+        self,
+        *,
+        session_id: str | None = None,
+        renderer_id: str | None = None,
+    ) -> RendererRecord:
+        if renderer_id:
+            renderer = self.get_renderer(renderer_id)
+            if session_id is not None and renderer.session_id != session_id:
+                raise ForgeCADError(
+                    "RENDERER_SESSION_MISMATCH",
+                    f"Renderer {renderer_id!r} is not attached to session {session_id!r}",
+                    details={
+                        "renderer_id": renderer_id,
+                        "session_id": session_id,
+                        "renderer_session_id": renderer.session_id,
+                    },
+                )
+            return renderer
+
+        session = self.resolve_session(session_id)
+        candidates = self.list_renderers(session.session_id)
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            return sorted(candidates, key=lambda item: item.updated_at)[-1]
+        raise ForgeCADError(
+            "RENDERER_NOT_FOUND",
+            "No renderer is attached to this session",
+            details={"session_id": session.session_id},
+            recoverable=True,
+        )
+
+    def update_renderer_view_state(
+        self,
+        renderer_id: str,
+        *,
+        view_state: dict[str, Any],
+        model_id: str | None = None,
+        revision_id: str | None = None,
+    ) -> RendererRecord:
+        renderer = self.get_renderer(renderer_id)
+        renderer.view_state = self._normalized_view_state(view_state)
+        renderer.current_model_id = model_id
+        renderer.current_revision_id = revision_id
+        renderer.updated_at = utc_now_iso()
+        self.events.emit(
+            "view.state.updated",
+            session_id=renderer.session_id,
+            model_id=model_id,
+            revision_id=revision_id,
+            payload={"renderer": renderer.to_dict()},
+        )
+        return renderer
+
+    def create_render_command(
+        self,
+        *,
+        command: str,
+        session_id: str,
+        renderer_id: str | None = None,
+        model_id: str | None = None,
+        revision_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> RenderCommandRecord:
+        self.get_session(session_id)
+        command_id = f"render_cmd_{next(self._render_command_counter):08d}"
+        record = RenderCommandRecord(
+            command_id=command_id,
+            command=command,
+            session_id=session_id,
+            renderer_id=renderer_id,
+            model_id=model_id,
+            revision_id=revision_id,
+            payload=payload or {},
+        )
+        self.render_commands[command_id] = record
+        self.events.emit(
+            "view.command",
+            session_id=session_id,
+            model_id=model_id,
+            revision_id=revision_id,
+            payload={"command": record.to_dict()},
+        )
+        return record
+
+    def get_render_command(self, command_id: str) -> RenderCommandRecord:
+        try:
+            return self.render_commands[command_id]
+        except KeyError as exc:
+            raise ForgeCADError(
+                "RENDER_COMMAND_NOT_FOUND",
+                f"Render command {command_id!r} was not found",
+                details={"command_id": command_id},
+            ) from exc
+
+    def complete_render_command(self, command_id: str) -> RenderCommandRecord:
+        command = self.get_render_command(command_id)
+        command.status = "completed"
+        command.updated_at = utc_now_iso()
+        return command
+
+    def record_capture(
+        self,
+        *,
+        renderer_id: str,
+        command_id: str | None,
+        image_base64: str,
+        mime_type: str = "image/png",
+        width: int | None = None,
+        height: int | None = None,
+        model_id: str | None = None,
+        revision_id: str | None = None,
+        view_state: dict[str, Any] | None = None,
+    ) -> CaptureRecord:
+        renderer = self.get_renderer(renderer_id)
+        capture_id = f"capture_{next(self._capture_counter):08d}"
+        capture = CaptureRecord(
+            capture_id=capture_id,
+            renderer_id=renderer_id,
+            session_id=renderer.session_id,
+            command_id=command_id,
+            image_base64=image_base64,
+            mime_type=mime_type,
+            width=width,
+            height=height,
+            model_id=model_id,
+            revision_id=revision_id,
+            view_state=self._normalized_view_state(view_state or renderer.view_state),
+        )
+        self.captures[capture_id] = capture
+        renderer.latest_capture_id = capture_id
+        renderer.current_model_id = model_id or renderer.current_model_id
+        renderer.current_revision_id = revision_id or renderer.current_revision_id
+        renderer.view_state = capture.view_state
+        renderer.updated_at = utc_now_iso()
+        if command_id is not None:
+            self.complete_render_command(command_id)
+        self.events.emit(
+            "render.capture.created",
+            session_id=renderer.session_id,
+            model_id=model_id,
+            revision_id=revision_id,
+            payload={
+                "capture": capture.to_dict(),
+                "renderer_id": renderer_id,
+            },
+        )
+        return capture
+
+    def get_capture(self, capture_id: str) -> CaptureRecord:
+        try:
+            return self.captures[capture_id]
+        except KeyError as exc:
+            raise ForgeCADError(
+                "CAPTURE_NOT_FOUND",
+                f"Capture {capture_id!r} was not found",
+                details={"capture_id": capture_id},
+            ) from exc
+
+    def latest_capture_for_renderer(self, renderer_id: str) -> CaptureRecord | None:
+        renderer = self.get_renderer(renderer_id)
+        if renderer.latest_capture_id is None:
+            return None
+        return self.get_capture(renderer.latest_capture_id)
+
+    def _normalized_view_state(self, view_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "camera": view_state.get("camera"),
+            "selected_shape_ids": list(view_state.get("selected_shape_ids") or []),
+            "visible_node_states": dict(view_state.get("visible_node_states") or {}),
+            "clipping": dict(view_state.get("clipping") or {}),
+            "active_analysis_tool": view_state.get("active_analysis_tool"),
+            "viewport_size": view_state.get("viewport_size"),
+        }

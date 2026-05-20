@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from queue import Empty
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from forgecad_core.errors import ForgeCADError
 
@@ -23,6 +26,9 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         super().log_message(fmt, *args)
 
     def do_GET(self) -> None:  # pylint: disable=invalid-name
+        if self._is_events_websocket():
+            self._handle_events_websocket()
+            return
         self._handle("GET")
 
     def do_POST(self) -> None:  # pylint: disable=invalid-name
@@ -51,7 +57,9 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
             )
 
     def _dispatch(self, method: str) -> dict[str, Any]:
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path.rstrip("/") or "/"
+        query = parse_qs(parsed_url.query)
         parts = [p for p in path.split("/") if p]
         body = self._read_body()
 
@@ -97,6 +105,105 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
                 source_ref=body.get("source_ref"),
             )
 
+        if parts == ["renderers"] and method == "GET":
+            session_ids = query.get("session_id")
+            return self.service.list_renderers(
+                session_id=session_ids[0] if session_ids else None,
+            )
+
+        if parts == ["renderers"] and method == "POST":
+            return self.service.register_renderer(
+                session_id=body["session_id"],
+                renderer_id=body.get("renderer_id"),
+                capabilities=body.get("capabilities"),
+                view_state=body.get("view_state"),
+            )
+
+        if len(parts) >= 2 and parts[0] == "renderers":
+            renderer_id = parts[1]
+            tail = parts[2:]
+            if tail == [] and method == "GET":
+                return self.service.get_renderer(renderer_id)
+            if tail == ["view-state"] and method == "GET":
+                return self.service.get_renderer_view_state(renderer_id)
+            if tail == ["view-state"] and method == "POST":
+                return self.service.update_renderer_view_state(
+                    renderer_id,
+                    view_state=body.get("view_state", {}),
+                    model_id=body.get("model_id"),
+                    revision_id=body.get("revision_id"),
+                )
+            if tail == ["captures"] and method == "POST":
+                return self.service.record_renderer_capture(
+                    renderer_id,
+                    command_id=body.get("command_id"),
+                    image_base64=body["image_base64"],
+                    mime_type=body.get("mime_type", "image/png"),
+                    width=body.get("width"),
+                    height=body.get("height"),
+                    model_id=body.get("model_id"),
+                    revision_id=body.get("revision_id"),
+                    view_state=body.get("view_state"),
+                )
+
+        if len(parts) == 3 and parts[:2] == ["render", "commands"] and method == "GET":
+            return self.service.get_render_command(parts[2])
+
+        if parts == ["render", "render_revision"] and method == "POST":
+            return self.service.render_revision(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                model_id=body.get("model_id"),
+                revision_id=body.get("revision_id"),
+                config=body.get("config"),
+            )
+
+        if parts == ["render", "capture"] and method == "POST":
+            return self.service.capture_view(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                model_id=body.get("model_id"),
+                revision_id=body.get("revision_id"),
+                config=body.get("config"),
+            )
+
+        if parts == ["render", "capture_overview"] and method == "POST":
+            return self.service.capture_overview(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                model_id=body.get("model_id"),
+                revision_id=body.get("revision_id"),
+                views=body.get("views"),
+                config=body.get("config"),
+            )
+
+        if parts == ["render", "set_camera"] and method == "POST":
+            return self.service.set_camera(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                camera=body.get("camera", {}),
+            )
+
+        if parts == ["render", "set_visibility"] and method == "POST":
+            return self.service.set_visibility(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                visible_node_states=body.get("visible_node_states", {}),
+            )
+
+        if parts == ["render", "set_clipping"] and method == "POST":
+            return self.service.set_clipping(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+                clipping=body.get("clipping", {}),
+            )
+
+        if parts == ["render", "get_view_state"] and method == "POST":
+            return self.service.get_view_state(
+                session_id=body.get("session_id"),
+                renderer_id=body.get("renderer_id"),
+            )
+
         if len(parts) >= 4 and parts[0] == "models" and parts[2] == "revisions":
             model_id = parts[1]
             revision_id = parts[3]
@@ -114,6 +221,12 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
                     model_id,
                     revision_id,
                     body.get("queries", []),
+                )
+            if tail == ["measure"] and method == "POST":
+                return self.service.measure_revision(
+                    model_id,
+                    revision_id,
+                    body.get("measurements"),
                 )
             if tail == ["export", "stl"] and method == "POST":
                 return self.service.export_stl(
@@ -151,6 +264,76 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _is_events_websocket(self) -> bool:
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        return (
+            path == "/events"
+            and self.headers.get("upgrade", "").lower() == "websocket"
+        )
+
+    def _handle_events_websocket(self) -> None:
+        key = self.headers.get("sec-websocket-key")
+        if not key:
+            self._send_json(
+                {
+                    "error": {
+                        "code": "WEBSOCKET_BAD_REQUEST",
+                        "message": "Missing Sec-WebSocket-Key header",
+                        "details": {},
+                        "recoverable": True,
+                    }
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        accept = base64.b64encode(
+            hashlib.sha1(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+            ).digest()
+        ).decode("ascii")
+        self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+
+        subscription = self.service.store.events.subscribe(replay=False)
+        self.close_connection = True
+        try:
+            self._send_websocket_message(
+                {
+                    "event_type": "events.subscribed",
+                    "payload": {"replay": False},
+                }
+            )
+            while True:
+                try:
+                    event = subscription.get(timeout=30)
+                except Empty:
+                    event = {"event_type": "events.heartbeat", "payload": {}}
+                self._send_websocket_message(event)
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+        finally:
+            subscription.close()
+
+    def _send_websocket_message(self, message: dict[str, Any]) -> None:
+        payload = json.dumps(message, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+        length = len(payload)
+        header = bytearray([0x81])
+        if length < 126:
+            header.append(length)
+        elif length < 65536:
+            header.extend((126, (length >> 8) & 0xFF, length & 0xFF))
+        else:
+            header.append(127)
+            header.extend(length.to_bytes(8, "big"))
+        self.wfile.write(bytes(header) + payload)
+        self.wfile.flush()
 
 
 def create_server(

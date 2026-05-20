@@ -107,3 +107,100 @@ class ServiceEvent:
             "payload": self.payload,
             "created_at": self.created_at,
         }
+
+
+def default_view_state() -> dict[str, Any]:
+    return {
+        "camera": None,
+        "selected_shape_ids": [],
+        "visible_node_states": {},
+        "clipping": {},
+        "active_analysis_tool": None,
+        "viewport_size": None,
+    }
+
+
+@dataclass(slots=True)
+class RendererRecord:
+    renderer_id: str
+    session_id: str
+    capabilities: dict[str, Any] = field(default_factory=dict)
+    view_state: dict[str, Any] = field(default_factory=default_view_state)
+    current_model_id: str | None = None
+    current_revision_id: str | None = None
+    latest_capture_id: str | None = None
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "renderer_id": self.renderer_id,
+            "session_id": self.session_id,
+            "capabilities": self.capabilities,
+            "view_state": self.view_state,
+            "current_model_id": self.current_model_id,
+            "current_revision_id": self.current_revision_id,
+            "latest_capture_id": self.latest_capture_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(slots=True)
+class RenderCommandRecord:
+    command_id: str
+    command: str
+    session_id: str
+    renderer_id: str | None = None
+    model_id: str | None = None
+    revision_id: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    status: str = "queued"
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "command_id": self.command_id,
+            "command": self.command,
+            "session_id": self.session_id,
+            "renderer_id": self.renderer_id,
+            "model_id": self.model_id,
+            "revision_id": self.revision_id,
+            "payload": self.payload,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(slots=True)
+class CaptureRecord:
+    capture_id: str
+    renderer_id: str
+    session_id: str
+    command_id: str | None
+    image_base64: str
+    mime_type: str = "image/png"
+    width: int | None = None
+    height: int | None = None
+    model_id: str | None = None
+    revision_id: str | None = None
+    view_state: dict[str, Any] = field(default_factory=default_view_state)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "capture_id": self.capture_id,
+            "renderer_id": self.renderer_id,
+            "session_id": self.session_id,
+            "command_id": self.command_id,
+            "image_base64": self.image_base64,
+            "mime_type": self.mime_type,
+            "width": self.width,
+            "height": self.height,
+            "model_id": self.model_id,
+            "revision_id": self.revision_id,
+            "view_state": self.view_state,
+            "created_at": self.created_at,
+        }
