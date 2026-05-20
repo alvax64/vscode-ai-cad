@@ -1,3 +1,15 @@
+# ForgeCAD
+
+ForgeCAD is the working name for this fork. The repository is being reworked
+from an OCP CAD Viewer fork into a service-centered CAD IDE foundation for VS
+Code and generic MCP-aware agents.
+
+The legacy OCP CAD Viewer code remains in place while the new architecture is
+introduced. The Phase 0 architecture documents live in
+[docs/architecture](./docs/architecture/README.md).
+
+## Legacy OCP CAD Viewer Reference
+
 # _OCP CAD Viewer_ for VS Code
 
 _OCP CAD Viewer_ for VS Code is an extension to show [CadQuery](https://github.com/cadquery/cadquery) and [build123d](https://github.com/gumyr/build123d) objects in VS Code via the [three-cad-viewer](https://github.com/bernhard-42/three-cad-viewer) viewer component.
