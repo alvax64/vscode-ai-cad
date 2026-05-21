@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from forgecad_core.errors import ForgeCADError
+from forgecad_core.serialization import to_json_compatible
 
 
 @dataclass(slots=True)
@@ -60,6 +61,8 @@ class GeometryRuntime:
             namespace["build123d"] = build123d
 
         try:
+            old_no_show = os.environ.get("CADQUERY_NO_SHOW")
+            os.environ["CADQUERY_NO_SHOW"] = "1"
             exec(script, namespace)  # pylint: disable=exec-used
         except Exception as exc:
             raise ForgeCADError(
@@ -68,6 +71,11 @@ class GeometryRuntime:
                 details={"traceback": traceback.format_exc()},
                 recoverable=True,
             ) from exc
+        finally:
+            if old_no_show is None:
+                os.environ.pop("CADQUERY_NO_SHOW", None)
+            else:
+                os.environ["CADQUERY_NO_SHOW"] = old_no_show
 
         if "result" not in namespace:
             raise ForgeCADError(
@@ -167,13 +175,13 @@ class GeometryRuntime:
             from ocp_vscode.show import _convert
 
             converted, mapping = _convert(obj, progress=None)
-            return {
+            return to_json_compatible({
                 "instances": converted[0],
                 "shapes": converted[1],
                 "config": converted[2],
                 "count": converted[3],
                 "mapping": mapping,
-            }
+            })
         except Exception as exc:
             raise ForgeCADError(
                 "TESSELLATION_FAILED",

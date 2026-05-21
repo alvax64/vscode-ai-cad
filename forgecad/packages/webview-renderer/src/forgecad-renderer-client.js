@@ -262,43 +262,62 @@ export class DomStatusRenderer {
   constructor(mount) {
     this.mount = mount || document.body;
     this.canvas = document.createElement("canvas");
-    this.canvas.width = 960;
-    this.canvas.height = 540;
+    this.overlay = document.createElement("div");
+    this.overlay.style.position = "fixed";
+    this.overlay.style.left = "16px";
+    this.overlay.style.top = "14px";
+    this.overlay.style.color = "#c9d1d9";
+    this.overlay.style.font = "12px system-ui, sans-serif";
+    this.overlay.style.opacity = "0.76";
+    this.overlay.style.pointerEvents = "none";
     this.canvas.style.width = "100%";
     this.canvas.style.height = "100%";
     this.canvas.style.display = "block";
-    this.mount.replaceChildren(this.canvas);
+    this.canvas.style.cursor = "grab";
+    this.mount.replaceChildren(this.canvas, this.overlay);
     this.lastRender = null;
+    this.meshes = [];
+    this.edges = [];
+    this.bounds = null;
+    this.theta = Math.PI / 4;
+    this.phi = Math.PI / 3;
+    this.distance = 1;
+    this.target = [0, 0, 0];
+    this.animationFrame = 0;
+    this.drag = null;
+    this.gl = this.canvas.getContext("webgl", { antialias: true });
+    if (this.gl) {
+      this.program = createProgram(this.gl, VERTEX_SHADER, FRAGMENT_SHADER);
+      this.locations = {
+        position: this.gl.getAttribLocation(this.program, "a_position"),
+        normal: this.gl.getAttribLocation(this.program, "a_normal"),
+        viewProjection: this.gl.getUniformLocation(this.program, "u_viewProjection"),
+        color: this.gl.getUniformLocation(this.program, "u_color"),
+        lightDirection: this.gl.getUniformLocation(this.program, "u_lightDirection"),
+        useLighting: this.gl.getUniformLocation(this.program, "u_useLighting")
+      };
+    }
+    this.installControls();
   }
 
   async renderRevision(renderRequest) {
     this.lastRender = renderRequest;
-    const context = this.canvas.getContext("2d");
-    context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    context.fillStyle = "#121316";
-    context.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    context.fillStyle = "#f5c542";
-    context.font = "24px system-ui, sans-serif";
-    context.fillText("ForgeCAD Renderer", 32, 48);
-    context.fillStyle = "#f2f2f2";
-    context.font = "16px system-ui, sans-serif";
-    context.fillText(`model: ${renderRequest.modelId}`, 32, 92);
-    context.fillText(`revision: ${renderRequest.revisionId}`, 32, 120);
     const scene = renderRequest.tessellatedScene || {};
-    const shapeCount = Object.keys(scene.shapes || {}).length;
-    const instanceCount = Array.isArray(scene.instances) ? scene.instances.length : 0;
-    context.fillText(`shapes: ${shapeCount}`, 32, 158);
-    context.fillText(`instances: ${instanceCount}`, 32, 186);
+    this.overlay.textContent = `${renderRequest.modelId} · ${renderRequest.revisionId}`;
+    if (!this.gl) {
+      this.renderFallback(scene);
+      return;
+    }
+    this.loadScene(scene);
+    this.frameScene();
+    this.draw();
   }
 
   async renderEmpty() {
-    const context = this.canvas.getContext("2d");
-    context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    context.fillStyle = "#121316";
-    context.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    context.fillStyle = "#f2f2f2";
-    context.font = "18px system-ui, sans-serif";
-    context.fillText("No active ForgeCAD model", 32, 48);
+    this.meshes = [];
+    this.edges = [];
+    this.overlay.textContent = "No active ForgeCAD model";
+    this.clear();
   }
 
   async captureView() {
@@ -317,11 +336,231 @@ export class DomStatusRenderer {
   async getViewState() {
     return {
       ...DEFAULT_VIEW_STATE,
+      camera: {
+        target: this.target,
+        theta: this.theta,
+        phi: this.phi,
+        distance: this.distance
+      },
       viewport_size: {
         width: this.canvas.clientWidth || this.canvas.width,
         height: this.canvas.clientHeight || this.canvas.height
       }
     };
+  }
+
+  async setCamera(camera = {}) {
+    if (Array.isArray(camera.target)) {
+      this.target = camera.target.slice(0, 3).map(Number);
+    }
+    if (Number.isFinite(camera.theta)) {
+      this.theta = camera.theta;
+    }
+    if (Number.isFinite(camera.phi)) {
+      this.phi = clamp(camera.phi, 0.08, Math.PI - 0.08);
+    }
+    if (Number.isFinite(camera.distance)) {
+      this.distance = Math.max(camera.distance, 0.001);
+    }
+    this.draw();
+  }
+
+  installControls() {
+    this.canvas.addEventListener("pointerdown", (event) => {
+      this.canvas.setPointerCapture(event.pointerId);
+      this.canvas.style.cursor = "grabbing";
+      this.drag = { x: event.clientX, y: event.clientY };
+    });
+    this.canvas.addEventListener("pointermove", (event) => {
+      if (!this.drag) {
+        return;
+      }
+      const dx = event.clientX - this.drag.x;
+      const dy = event.clientY - this.drag.y;
+      this.drag = { x: event.clientX, y: event.clientY };
+      this.theta -= dx * 0.01;
+      this.phi = clamp(this.phi + dy * 0.01, 0.08, Math.PI - 0.08);
+      this.draw();
+      this.onStateChanged?.({
+        camera: {
+          target: this.target,
+          theta: this.theta,
+          phi: this.phi,
+          distance: this.distance
+        }
+      });
+    });
+    this.canvas.addEventListener("pointerup", (event) => {
+      this.canvas.releasePointerCapture(event.pointerId);
+      this.canvas.style.cursor = "grab";
+      this.drag = null;
+    });
+    this.canvas.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        this.distance *= Math.exp(event.deltaY * 0.001);
+        this.draw();
+      },
+      { passive: false }
+    );
+    window.addEventListener("resize", () => this.draw());
+  }
+
+  loadScene(scene) {
+    const gl = this.gl;
+    this.meshes.forEach((mesh) => {
+      gl.deleteBuffer(mesh.vertexBuffer);
+      gl.deleteBuffer(mesh.normalBuffer);
+      gl.deleteBuffer(mesh.indexBuffer);
+    });
+    this.edges.forEach((edge) => {
+      gl.deleteBuffer(edge.vertexBuffer);
+      gl.deleteBuffer(edge.normalBuffer);
+    });
+    this.meshes = [];
+    this.edges = [];
+    const bounds = emptyBounds();
+    for (const instance of scene.instances || []) {
+      const vertices = numericArray(instance.vertices);
+      const triangles = numericArray(instance.triangles);
+      if (vertices.length < 9 || triangles.length < 3) {
+        continue;
+      }
+      extendBounds(bounds, vertices);
+      const normals = numericArray(instance.normals);
+      const maxIndex = maxArray(triangles);
+      const mesh = {
+        vertexBuffer: bufferData(gl, gl.ARRAY_BUFFER, new Float32Array(vertices)),
+        normalBuffer: bufferData(
+          gl,
+          gl.ARRAY_BUFFER,
+          new Float32Array(normals.length === vertices.length ? normals : generatedNormals(vertices, triangles))
+        ),
+        indexBuffer: bufferData(gl, gl.ELEMENT_ARRAY_BUFFER, indexArray(triangles)),
+        indexType: maxIndex > 65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+        count: triangles.length
+      };
+      if (mesh.indexType === gl.UNSIGNED_INT) {
+        gl.getExtension("OES_element_index_uint");
+      }
+      this.meshes.push(mesh);
+
+      const edgeVertices = edgeArray(instance.edges);
+      if (edgeVertices.length >= 6) {
+        this.edges.push({
+          vertexBuffer: bufferData(gl, gl.ARRAY_BUFFER, new Float32Array(edgeVertices)),
+          normalBuffer: bufferData(gl, gl.ARRAY_BUFFER, new Float32Array(edgeVertices.length).fill(1)),
+          count: edgeVertices.length / 3
+        });
+      }
+    }
+    this.bounds = bounds.valid ? bounds : null;
+  }
+
+  frameScene() {
+    if (!this.bounds) {
+      this.target = [0, 0, 0];
+      this.distance = 100;
+      return;
+    }
+    const min = this.bounds.min;
+    const max = this.bounds.max;
+    this.target = [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2
+    ];
+    const radius = Math.max(
+      distance3(min, max) / 2,
+      1
+    );
+    this.distance = radius * 2.8;
+  }
+
+  draw() {
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+    }
+    this.animationFrame = requestAnimationFrame(() => {
+      this.animationFrame = 0;
+      this.drawNow();
+    });
+  }
+
+  drawNow() {
+    const gl = this.gl;
+    if (!gl) {
+      return;
+    }
+    resizeCanvas(this.canvas);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.clearColor(0.071, 0.075, 0.086, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.useProgram(this.program);
+
+    const aspect = this.canvas.width / Math.max(1, this.canvas.height);
+    const projection = perspective(Math.PI / 4, aspect, Math.max(0.01, this.distance / 100), this.distance * 100);
+    const eye = [
+      this.target[0] + this.distance * Math.sin(this.phi) * Math.cos(this.theta),
+      this.target[1] + this.distance * Math.sin(this.phi) * Math.sin(this.theta),
+      this.target[2] + this.distance * Math.cos(this.phi)
+    ];
+    const view = lookAt(eye, this.target, [0, 0, 1]);
+    const viewProjection = multiply(projection, view);
+    gl.uniformMatrix4fv(this.locations.viewProjection, false, viewProjection);
+    gl.uniform3f(this.locations.lightDirection, -0.35, -0.55, 0.76);
+
+    for (const mesh of this.meshes) {
+      gl.uniform4f(this.locations.color, 0.91, 0.69, 0.14, 1);
+      gl.uniform1i(this.locations.useLighting, 1);
+      bindAttribute(gl, this.locations.position, mesh.vertexBuffer, 3);
+      bindAttribute(gl, this.locations.normal, mesh.normalBuffer, 3);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+      gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
+    }
+
+    gl.disable(gl.CULL_FACE);
+    gl.depthFunc(gl.LEQUAL);
+    for (const edge of this.edges) {
+      gl.uniform4f(this.locations.color, 0.04, 0.045, 0.052, 1);
+      gl.uniform1i(this.locations.useLighting, 0);
+      bindAttribute(gl, this.locations.position, edge.vertexBuffer, 3);
+      bindAttribute(gl, this.locations.normal, edge.normalBuffer, 3);
+      gl.drawArrays(gl.LINES, 0, edge.count);
+    }
+    gl.depthFunc(gl.LESS);
+  }
+
+  clear() {
+    if (this.gl) {
+      this.draw();
+      return;
+    }
+    const context = this.canvas.getContext("2d");
+    context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    context.fillStyle = "#121316";
+    context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  renderFallback(scene) {
+    const context = this.canvas.getContext("2d");
+    context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    context.fillStyle = "#121316";
+    context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    context.fillStyle = "#f5c542";
+    context.font = "24px system-ui, sans-serif";
+    context.fillText("ForgeCAD Renderer", 32, 48);
+    context.fillStyle = "#f2f2f2";
+    context.font = "16px system-ui, sans-serif";
+    context.fillText("WebGL is unavailable in this VS Code webview.", 32, 92);
+    context.fillText(`instances: ${(scene.instances || []).length}`, 32, 120);
+  }
+
+  onViewStateChanged(callback) {
+    this.onStateChanged = callback;
   }
 }
 
@@ -370,4 +609,215 @@ function stripTrailingSlash(value) {
 
 function stripDataUrlPrefix(value) {
   return String(value || "").replace(/^data:[^,]+,/, "");
+}
+
+const VERTEX_SHADER = `
+attribute vec3 a_position;
+attribute vec3 a_normal;
+uniform mat4 u_viewProjection;
+varying vec3 v_normal;
+void main() {
+  gl_Position = u_viewProjection * vec4(a_position, 1.0);
+  v_normal = a_normal;
+}
+`;
+
+const FRAGMENT_SHADER = `
+precision mediump float;
+uniform vec4 u_color;
+uniform vec3 u_lightDirection;
+uniform bool u_useLighting;
+varying vec3 v_normal;
+void main() {
+  float light = u_useLighting ? max(dot(normalize(v_normal), normalize(u_lightDirection)), 0.0) : 1.0;
+  float shade = u_useLighting ? 0.38 + light * 0.62 : 1.0;
+  gl_FragColor = vec4(u_color.rgb * shade, u_color.a);
+}
+`;
+
+function createProgram(gl, vertexSource, fragmentSource) {
+  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  const program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program) || "Failed to link WebGL program");
+  }
+  return program;
+}
+
+function compileShader(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader) || "Failed to compile WebGL shader");
+  }
+  return shader;
+}
+
+function bufferData(gl, target, data) {
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(target, buffer);
+  gl.bufferData(target, data, gl.STATIC_DRAW);
+  return buffer;
+}
+
+function bindAttribute(gl, location, buffer, size) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.enableVertexAttribArray(location);
+  gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+}
+
+function numericArray(value) {
+  return Array.isArray(value) ? value.map(Number).filter(Number.isFinite) : [];
+}
+
+function edgeArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (typeof value[0] === "number") {
+    return numericArray(value);
+  }
+  return value.flatMap((point) => numericArray(point).slice(0, 3));
+}
+
+function indexArray(values) {
+  const max = maxArray(values);
+  return max > 65535 ? new Uint32Array(values) : new Uint16Array(values);
+}
+
+function maxArray(values) {
+  let max = 0;
+  for (const value of values) {
+    if (value > max) {
+      max = value;
+    }
+  }
+  return max;
+}
+
+function generatedNormals(vertices, indices) {
+  const normals = new Float32Array(vertices.length);
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const ia = indices[index] * 3;
+    const ib = indices[index + 1] * 3;
+    const ic = indices[index + 2] * 3;
+    const a = [vertices[ia], vertices[ia + 1], vertices[ia + 2]];
+    const b = [vertices[ib], vertices[ib + 1], vertices[ib + 2]];
+    const c = [vertices[ic], vertices[ic + 1], vertices[ic + 2]];
+    const normal = normalize(cross(subtract(b, a), subtract(c, a)));
+    for (const offset of [ia, ib, ic]) {
+      normals[offset] += normal[0];
+      normals[offset + 1] += normal[1];
+      normals[offset + 2] += normal[2];
+    }
+  }
+  for (let index = 0; index + 2 < normals.length; index += 3) {
+    const normal = normalize([normals[index], normals[index + 1], normals[index + 2]]);
+    normals[index] = normal[0];
+    normals[index + 1] = normal[1];
+    normals[index + 2] = normal[2];
+  }
+  return normals;
+}
+
+function emptyBounds() {
+  return {
+    min: [Infinity, Infinity, Infinity],
+    max: [-Infinity, -Infinity, -Infinity],
+    valid: false
+  };
+}
+
+function extendBounds(bounds, vertices) {
+  for (let index = 0; index + 2 < vertices.length; index += 3) {
+    bounds.valid = true;
+    for (let axis = 0; axis < 3; axis += 1) {
+      bounds.min[axis] = Math.min(bounds.min[axis], vertices[index + axis]);
+      bounds.max[axis] = Math.max(bounds.max[axis], vertices[index + axis]);
+    }
+  }
+}
+
+function resizeCanvas(canvas) {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.floor(canvas.clientWidth * ratio));
+  const height = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0
+  ]);
+}
+
+function lookAt(eye, center, up) {
+  const z = normalize(subtract(eye, center));
+  const x = normalize(cross(up, z));
+  const y = cross(z, x);
+  return new Float32Array([
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -dot(x, eye), -dot(y, eye), -dot(z, eye), 1
+  ]);
+}
+
+function multiply(a, b) {
+  const out = new Float32Array(16);
+  for (let column = 0; column < 4; column += 1) {
+    for (let row = 0; row < 4; row += 1) {
+      out[column * 4 + row] =
+        a[0 * 4 + row] * b[column * 4 + 0] +
+        a[1 * 4 + row] * b[column * 4 + 1] +
+        a[2 * 4 + row] * b[column * 4 + 2] +
+        a[3 * 4 + row] * b[column * 4 + 3];
+    }
+  }
+  return out;
+}
+
+function subtract(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function normalize(value) {
+  const length = Math.hypot(value[0], value[1], value[2]);
+  if (!length) {
+    return [0, 0, 1];
+  }
+  return [value[0] / length, value[1] / length, value[2] / length];
+}
+
+function distance3(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }

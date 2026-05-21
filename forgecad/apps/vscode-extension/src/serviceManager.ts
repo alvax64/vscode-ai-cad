@@ -202,6 +202,30 @@ export class ForgeCADServiceManager {
     return this.lastCurrent;
   }
 
+  async evaluateScript(
+    script: string,
+    options: {
+      name: string;
+      sourceRef?: Record<string, unknown>;
+    }
+  ): Promise<Record<string, unknown>> {
+    if (!this.client || !this.sessionId) {
+      await this.startOrConnect();
+    }
+    if (!this.client || !this.sessionId) {
+      throw new Error("ForgeCAD service is not connected.");
+    }
+    const result = await this.client.evaluateScript(
+      this.sessionId,
+      script,
+      options.name,
+      options.sourceRef
+    );
+    this.lastCurrent = await this.client.current(this.sessionId);
+    this.statusEmitter.fire();
+    return result;
+  }
+
   async exportCurrentStl(outputPath: string) {
     if (!this.client) {
       await this.startOrConnect();

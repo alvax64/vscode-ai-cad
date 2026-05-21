@@ -18,7 +18,14 @@
     "onCommand:forgecad.stopService",
     "onCommand:forgecad.openViewer",
     "onCommand:forgecad.exportStl",
-    "onCommand:forgecad.resetSession"
+    "onCommand:forgecad.resetSession",
+    "onCommand:forgecad.showStatus",
+    "onCommand:forgecad.copyMcpServiceEndpoint",
+    "onCommand:forgecad.openActiveModelSource",
+    "onCommand:forgecad.runActiveFile",
+    "onCommand:forgecad.refreshStatus",
+    "onCommand:forgecad.selectPythonInterpreter",
+    "onView:forgecadStatus"
   ],
   "main": "./out/extension.js",
   "scripts": {
@@ -67,8 +74,17 @@
         "title": "ForgeCAD: Open Active Model Source"
       },
       {
+        "command": "forgecad.runActiveFile",
+        "title": "ForgeCAD: Run Active Python File",
+        "icon": "$(play)"
+      },
+      {
         "command": "forgecad.refreshStatus",
         "title": "ForgeCAD: Refresh Status"
+      },
+      {
+        "command": "forgecad.selectPythonInterpreter",
+        "title": "ForgeCAD: Select Python Interpreter"
       }
     ],
     "viewsContainers": {
@@ -88,10 +104,24 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "forgecadStatus",
+        "contents": "Start a workspace-local CAD service:\n[Start Service](command:forgecad.startService)\n\nOpen the renderer:\n[Open Viewer](command:forgecad.openViewer)"
+      },
+      {
+        "view": "forgecadStatus",
+        "contents": "Choose the Python executable used by the ForgeCAD service:\n[Select Python Interpreter](command:forgecad.selectPythonInterpreter)"
+      },
+      {
+        "view": "forgecadStatus",
+        "contents": "Useful commands:\n[Show Status](command:forgecad.showStatus)\n[Copy MCP Endpoint](command:forgecad.copyMcpServiceEndpoint)\n[Export STL](command:forgecad.exportStl)"
+      }
+    ],
     "menus": {
       "view/title": [
         {
-          "command": "forgecad.refreshStatus",
+          "command": "forgecad.startService",
           "when": "view == forgecadStatus",
           "group": "navigation@1"
         },
@@ -99,6 +129,23 @@
           "command": "forgecad.openViewer",
           "when": "view == forgecadStatus",
           "group": "navigation@2"
+        },
+        {
+          "command": "forgecad.refreshStatus",
+          "when": "view == forgecadStatus",
+          "group": "navigation@3"
+        },
+        {
+          "command": "forgecad.selectPythonInterpreter",
+          "when": "view == forgecadStatus",
+          "group": "navigation@4"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "forgecad.runActiveFile",
+          "when": "resourceLangId == python",
+          "group": "navigation@1"
         }
       ]
     },

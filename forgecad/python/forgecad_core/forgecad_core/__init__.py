@@ -7,6 +7,7 @@ from .models import (
     SessionRecord,
     ServiceEvent,
 )
+from .serialization import to_json_compatible
 
 __all__ = [
     "ErrorPayload",
@@ -15,4 +16,5 @@ __all__ = [
     "RevisionRecord",
     "ServiceEvent",
     "SessionRecord",
+    "to_json_compatible",
 ]

@@ -24,6 +24,21 @@ export class ForgeCADServiceClient {
     return this.post("/sessions", { root_path: rootPath });
   }
 
+  evaluateScript(
+    sessionId: string,
+    script: string,
+    name: string,
+    sourceRef?: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    return this.post("/models/evaluate", {
+      session_id: sessionId,
+      script,
+      name,
+      include_tessellation: true,
+      source_ref: sourceRef
+    });
+  }
+
   current(sessionId: string): Promise<ForgeCADCurrent> {
     return this.get(`/sessions/${encodeURIComponent(sessionId)}/current`);
   }

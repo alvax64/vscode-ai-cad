@@ -454,6 +454,98 @@ class Phase2RendererServiceTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_http_renderer_commands_convert_array_like_tessellation_values(self):
+        service = ForgeCADService()
+        session = service.create_session()
+        accepted = service.accept_model(
+            session_id=session["session_id"],
+            name="array-renderable",
+            tessellated_scene={
+                "instances": _ArrayLike([[1, 2, 3]]),
+                "shapes": {"shape_1": {"vertices": _ArrayLike([[0.0, 1.0, 2.0]])}},
+                "config": {},
+                "count": _ScalarLike(1),
+            },
+        )
+        renderer = service.register_renderer(session_id=session["session_id"])[
+            "renderer"
+        ]
+        server = create_server(service, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        try:
+            render = _post(
+                base + "/render/render_revision",
+                {
+                    "session_id": session["session_id"],
+                    "renderer_id": renderer["renderer_id"],
+                },
+            )
+            scene = render["command"]["payload"]["tessellated_scene"]
+
+            self.assertEqual(render["model_id"], accepted["model"]["model_id"])
+            self.assertEqual(scene["instances"], [[1, 2, 3]])
+            self.assertEqual(scene["shapes"]["shape_1"]["vertices"], [[0.0, 1.0, 2.0]])
+            self.assertEqual(scene["count"], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_renderer_commands_convert_opencascade_handles(self):
+        service = ForgeCADService()
+        session = service.create_session()
+        service.accept_model(
+            session_id=session["session_id"],
+            name="ocp-renderable",
+            tessellated_scene={
+                "instances": [],
+                "shapes": {},
+                "config": {},
+                "count": 1,
+                "mapping": {
+                    "parts": [
+                        {
+                            "shape": {
+                                "name": "Workplane(Solid)",
+                                "obj": _TopoDSLike(),
+                            },
+                            "loc": _TopLocLike(),
+                        }
+                    ]
+                },
+            },
+        )
+        renderer = service.register_renderer(session_id=session["session_id"])[
+            "renderer"
+        ]
+        server = create_server(service, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        try:
+            render = _post(
+                base + "/render/render_revision",
+                {
+                    "session_id": session["session_id"],
+                    "renderer_id": renderer["renderer_id"],
+                },
+            )
+            part = render["command"]["payload"]["tessellated_scene"]["mapping"]["parts"][0]
+
+            self.assertEqual(part["shape"]["obj"]["type"], "_TopoDSLike")
+            self.assertEqual(part["shape"]["obj"]["shape_type"], "TopAbs_COMPOUND")
+            self.assertEqual(part["loc"]["type"], "_TopLocLike")
+            self.assertEqual(
+                part["loc"]["transformation"]["matrix"],
+                [[1.0, 0.0, 0.0, 4.0], [0.0, 1.0, 0.0, 5.0], [0.0, 0.0, 1.0, 6.0]],
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 def _get(url: str):
     with urlopen(url, timeout=5) as response:
@@ -531,6 +623,64 @@ def _read_http_headers(sock: socket.socket) -> bytes:
             raise AssertionError("Socket closed while reading HTTP headers")
         data += chunk
     return data
+
+
+class _ArrayLike:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return self.values
+
+
+class _ScalarLike:
+    def __init__(self, value):
+        self.value = value
+
+    def item(self):
+        return self.value
+
+
+class _TopoDSLike:
+    __module__ = "OCP.OCP.TopoDS"
+
+    def ShapeType(self):
+        return "TopAbs_ShapeEnum.TopAbs_COMPOUND"
+
+    def IsNull(self):
+        return False
+
+    def HashCode(self):
+        return 123
+
+
+class _TopLocLike:
+    __module__ = "OCP.OCP.TopLoc"
+
+    def IsIdentity(self):
+        return False
+
+    def Transformation(self):
+        return _TrsfLike()
+
+
+class _TrsfLike:
+    def Value(self, row, column):
+        values = {
+            (1, 1): 1,
+            (1, 4): 4,
+            (2, 2): 1,
+            (2, 4): 5,
+            (3, 3): 1,
+            (3, 4): 6,
+        }
+        return values.get((row, column), 0)
+
+    def Form(self):
+        return "gp_TrsfForm.gp_Identity"
+
+    def ScaleFactor(self):
+        return 1.0
 
 
 def _read_until_ws_event(sock: socket.socket, event_type: str):

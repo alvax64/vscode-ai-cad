@@ -121,8 +121,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.window.showTextDocument(document);
       })
     ),
+    vscode.commands.registerCommand("forgecad.runActiveFile", () =>
+      run(output, async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.document.languageId !== "python") {
+          throw new Error("Open a Python file before running ForgeCAD.");
+        }
+
+        const document = editor.document;
+        const filePath = document.uri.scheme === "file" ? document.uri.fsPath : document.fileName;
+        const script = document.getText();
+        const modelName = path.basename(filePath, path.extname(filePath)) || "result";
+        const result = await serviceManager.evaluateScript(script, {
+          name: modelName,
+          sourceRef: {
+            kind: "python_file",
+            path: filePath,
+            language: "python"
+          }
+        });
+
+        await ForgeCADViewerPanel.open(context, serviceManager);
+        await refreshStatusBar();
+        const revision = result["revision"] as Record<string, unknown> | undefined;
+        vscode.window.showInformationMessage(
+          `ForgeCAD ran ${path.basename(filePath)}${revision?.["revision_id"] ? ` (${revision["revision_id"]})` : ""}.`
+        );
+      })
+    ),
     vscode.commands.registerCommand("forgecad.refreshStatus", () =>
       run(output, async () => {
+        await refreshStatusBar();
+      })
+    ),
+    vscode.commands.registerCommand("forgecad.selectPythonInterpreter", () =>
+      run(output, async () => {
+        await selectPythonInterpreter();
         await refreshStatusBar();
       })
     )
@@ -170,6 +204,59 @@ function sourcePathFromRevision(
     return candidate;
   }
   return workspaceRoot ? path.join(workspaceRoot, candidate) : path.resolve(candidate);
+}
+
+async function selectPythonInterpreter(): Promise<void> {
+  const forgecadConfig = vscode.workspace.getConfiguration("forgecad");
+  const configured = forgecadConfig.get<string>("python.path", "").trim();
+  const pythonConfig = vscode.workspace.getConfiguration("python");
+  const pythonDefault = pythonConfig.get<string>("defaultInterpreterPath", "").trim();
+  const candidates = uniqueStrings([
+    configured,
+    pythonDefault,
+    process.platform === "win32" ? "python.exe" : "python3",
+    process.platform === "win32" ? "py.exe" : "python"
+  ]).map((value) => ({
+    label: value,
+    description: value === configured ? "current ForgeCAD setting" : undefined
+  }));
+
+  const browse = {
+    label: "$(folder-opened) Browse...",
+    description: "Select a Python executable from disk"
+  };
+  const picked = await vscode.window.showQuickPick([...candidates, browse], {
+    title: "Select Python interpreter for ForgeCAD service",
+    placeHolder: "Choose the Python executable used to run forgecad_service"
+  });
+  if (!picked) {
+    return;
+  }
+
+  let selected = picked.label;
+  if (picked === browse) {
+    const files = await vscode.window.showOpenDialog({
+      title: "Select Python interpreter for ForgeCAD",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: "Use Interpreter"
+    });
+    if (!files || files.length === 0) {
+      return;
+    }
+    selected = files[0].fsPath;
+  }
+
+  const target = vscode.workspace.workspaceFolders?.length
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  await forgecadConfig.update("python.path", selected, target);
+  vscode.window.showInformationMessage(`ForgeCAD Python interpreter set to ${selected}`);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.length > 0)));
 }
 
 function stringField(sourceRef: Record<string, unknown>, key: string): string | null {

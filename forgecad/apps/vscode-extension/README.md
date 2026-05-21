@@ -15,9 +15,68 @@ metadata, revisions, tessellation, or exports.
 
 ## Development
 
-Open this folder as a VS Code extension project or run an extension host with
-`forgecad/apps/vscode-extension` as the extension root. In development, the
-extension can resolve assets from the monorepo layout:
+Use this exact flow when running the extension from source:
+
+1. Open the extension folder itself in VS Code:
+
+   ```bash
+   code /home/alvax/yo/vscode-ai-cad/forgecad/apps/vscode-extension
+   ```
+
+2. Install dependencies once:
+
+   ```bash
+   npm install
+   ```
+
+3. Press `F5`, or open **Run and Debug** and choose
+   **Run ForgeCAD Extension**. This uses `.vscode/launch.json`, runs
+   `npm: compile`, and opens a new isolated **Extension Development Host**
+   window with a separate user-data directory and extension directory.
+
+4. In the Extension Development Host, open a normal workspace folder, then trust
+   it when VS Code asks. Local service startup is blocked in untrusted
+   workspaces.
+
+5. Select the Python executable used to start the ForgeCAD service. This does
+   not require the Microsoft Python extension:
+
+   ```text
+   ForgeCAD: Select Python Interpreter
+   ```
+
+   The command writes `forgecad.python.path` into the demo workspace settings.
+
+6. If you also want VS Code's own `Python: Select Interpreter` command, install
+   the Microsoft Python extension inside the Extension Development Host:
+
+   - Open Extensions in the Extension Development Host.
+   - Install `Python` by Microsoft (`ms-python.python`).
+   - Run `Python: Select Interpreter`.
+
+   This install is isolated under `.vscode-test/extensions`; it does not load
+   your normal user extensions.
+
+7. Open the Command Palette in the Extension Development Host and run:
+
+   ```text
+   ForgeCAD: Start CAD Service
+   ForgeCAD: Open Viewer
+   ```
+
+   You can also click the ForgeCAD activity-bar icon. The **Service** view has
+   title-bar buttons for starting the service, opening the viewer, and
+   refreshing status.
+
+If the development host prints errors from unrelated extensions such as
+`vscodevim`, `vscode-custom-css`, or Claude integrations, make sure you launched
+with **Run ForgeCAD Extension** from this folder. The checked-in launch config
+passes `--user-data-dir` and `--extensions-dir` so your normal installed
+extensions do not load in the ForgeCAD development host. Extensions you install
+inside the development host, such as Microsoft Python, are kept in that isolated
+test extension directory.
+
+In development, the extension can resolve assets from the monorepo layout:
 
 ```text
 forgecad/

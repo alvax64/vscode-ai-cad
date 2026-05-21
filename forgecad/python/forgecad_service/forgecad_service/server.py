@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from forgecad_core.errors import ForgeCADError
+from forgecad_core.serialization import to_json_compatible
 
 from .service import ForgeCADService
 
@@ -280,9 +281,11 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
         *,
         status: HTTPStatus = HTTPStatus.OK,
     ) -> None:
-        payload = json.dumps(data, separators=(",", ":"), sort_keys=True).encode(
-            "utf-8"
-        )
+        payload = json.dumps(
+            to_json_compatible(data),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self._send_cors_headers()
@@ -402,9 +405,11 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
             subscription.close()
 
     def _send_websocket_message(self, message: dict[str, Any]) -> None:
-        payload = json.dumps(message, separators=(",", ":"), sort_keys=True).encode(
-            "utf-8"
-        )
+        payload = json.dumps(
+            to_json_compatible(message),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
         length = len(payload)
         header = bytearray([0x81])
         if length < 126:
