@@ -1,0 +1,18 @@
+{
+  "name": "@forgecad/webview-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Service-driven ForgeCAD browser renderer client.",
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p ."
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "exports": {
+    ".": "./dist/forgecad-renderer-client.js",
+    "./legacy-viewer-adapter": "./dist/legacy-viewer-adapter.js"
+  }
+}

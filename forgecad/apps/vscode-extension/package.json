@@ -31,8 +31,10 @@
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
-    "package-assets": "node scripts/sync-assets.mjs",
-    "vscode:prepublish": "npm run package-assets && npm run compile"
+    "compile-renderer": "npm --prefix ../../packages/webview-renderer run compile",
+    "compile:all": "npm run package-assets && npm run compile",
+    "package-assets": "npm run compile-renderer && node scripts/sync-assets.mjs",
+    "vscode:prepublish": "npm run compile:all"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",

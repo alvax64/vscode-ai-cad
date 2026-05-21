@@ -49,6 +49,6 @@ function rootsExist(roots: ForgeCADAssetRoots): boolean {
   return (
     fs.existsSync(path.join(roots.corePath, "forgecad_core")) &&
     fs.existsSync(path.join(roots.servicePath, "forgecad_service")) &&
-    fs.existsSync(path.join(roots.rendererPath, "src", "forgecad-renderer-client.js"))
+    fs.existsSync(path.join(roots.rendererPath, "dist", "forgecad-renderer-client.js"))
   );
 }

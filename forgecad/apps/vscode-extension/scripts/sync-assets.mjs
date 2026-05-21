@@ -24,6 +24,8 @@ for (const [sourceRelative, targetRelative] of copies) {
   fs.cpSync(source, target, {
     recursive: true,
     filter: (entry) =>
+      !entry.includes(`${path.sep}node_modules${path.sep}`) &&
+      !entry.endsWith(`${path.sep}node_modules`) &&
       !entry.includes(`${path.sep}__pycache__${path.sep}`) &&
       !entry.endsWith(`${path.sep}__pycache__`) &&
       !entry.includes(`${path.sep}.pytest_cache${path.sep}`) &&

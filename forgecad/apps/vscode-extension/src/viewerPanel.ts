@@ -59,7 +59,7 @@ export class ForgeCADViewerPanel {
     const nonce = randomNonce();
     const webview = this.panel.webview;
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.rendererRoot, "src", "forgecad-renderer-client.js")
+      vscode.Uri.joinPath(this.rendererRoot, "dist", "forgecad-renderer-client.js")
     );
     const serviceBaseUrl = JSON.stringify(status.baseUrl);
     const sessionId = JSON.stringify(status.sessionId);

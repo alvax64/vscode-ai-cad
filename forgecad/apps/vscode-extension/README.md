@@ -27,11 +27,12 @@ Use this exact flow when running the extension from source:
 
    ```bash
    npm install
+   npm --prefix ../../packages/webview-renderer install
    ```
 
 3. Press `F5`, or open **Run and Debug** and choose
    **Run ForgeCAD Extension**. This uses `.vscode/launch.json`, runs
-   `npm: compile`, and opens a new isolated **Extension Development Host**
+   `npm: compile:all`, and opens a new isolated **Extension Development Host**
    window with a separate user-data directory and extension directory.
 
 4. In the Extension Development Host, open a normal workspace folder, then trust
@@ -97,13 +98,14 @@ For VSIX/package builds, run:
 
 ```bash
 npm install
+npm --prefix ../../packages/webview-renderer install
 npm run package-assets
 npm run compile
 ```
 
-`package-assets` copies the Python service/core packages and WebView renderer
-under `vendor/`, so the installed extension does not depend on sibling
-monorepo folders.
+`package-assets` compiles the TypeScript WebView renderer, then copies the
+Python service/core packages and compiled renderer under `vendor/`, so the
+installed extension does not depend on sibling monorepo folders.
 
 Set `forgecad.service.url` and `forgecad.service.token` to use an already-running
 service instead.
