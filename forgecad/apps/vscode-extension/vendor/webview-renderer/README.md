@@ -52,9 +52,5 @@ const adapter = {
 ```
 
 The bundled `DomStatusRenderer` is a dependency-free fallback for contract
-testing. It displays revision identity and can return a PNG data URL, but it is
-not the production CAD renderer.
-
-`LegacyViewerAdapter` remains available from `./legacy-viewer-adapter` for the
-current VS Code WebView message protocol while the production
-`three-cad-viewer` adapter is completed.
+testing. Production VS Code and headless rendering use the exported
+`createThreeCadViewerAdapter`, backed by `three-cad-viewer`.

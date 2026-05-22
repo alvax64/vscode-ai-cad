@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Empty
@@ -74,7 +75,7 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
                     "error": {
                         "code": "INTERNAL_ERROR",
                         "message": str(exc),
-                        "details": {},
+                        "details": {"traceback": traceback.format_exc()},
                         "recoverable": False,
                     }
                 },
@@ -330,8 +331,16 @@ class ForgeCADRequestHandler(BaseHTTPRequestHandler):
             return True
         if origin.startswith("https://") and origin.endswith(".vscode-cdn.net"):
             return True
+        if self._is_loopback_origin(origin):
+            return True
         allowed_origins = getattr(self.server, "cors_origins", set())
         return origin in allowed_origins
+
+    def _is_loopback_origin(self, origin: str) -> bool:
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        return parsed.hostname in {"127.0.0.1", "::1", "localhost"}
 
     def _is_events_websocket(self) -> bool:
         path = urlparse(self.path).path.rstrip("/") or "/"

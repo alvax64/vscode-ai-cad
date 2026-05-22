@@ -2,6 +2,9 @@ type JsonObject = Record<string, unknown>;
 type Vec3 = [number, number, number];
 type Mat4 = Float32Array;
 
+export { createThreeCadViewerAdapter, ThreeCadViewerAdapter } from "./three-cad-viewer-adapter.js";
+export type { ThreeCadViewerAdapterOptions } from "./three-cad-viewer-adapter.js";
+
 export type ForgeCADViewState = {
   camera: JsonObject | null;
   selected_shape_ids: string[];
@@ -131,6 +134,8 @@ export class ForgeCADRendererClient {
   currentRevisionId: string | null = null;
   viewState: ForgeCADViewState = { ...DEFAULT_VIEW_STATE };
   websocket: WebSocket | null = null;
+  emptyPollTimer: number | null = null;
+  private eventQueue: Promise<void> = Promise.resolve();
 
   constructor(options: ForgeCADRendererClientOptions) {
     this.serviceBaseUrl = stripTrailingSlash(options.serviceBaseUrl);
@@ -145,9 +150,9 @@ export class ForgeCADRendererClient {
 
   async start(): Promise<this> {
     await this.registerRenderer();
-    await this.renderActiveRevision();
     this.connectEvents();
     this.attachAdapterViewStateListener();
+    await this.renderActiveRevision();
     return this;
   }
 
@@ -181,8 +186,10 @@ export class ForgeCADRendererClient {
     );
     if (!current.model || !current.revision) {
       await this.adapter.renderEmpty?.(current);
+      this.startEmptyPolling();
       return null;
     }
+    this.stopEmptyPolling();
     return this.renderRevision(current.model.model_id, current.revision.revision_id);
   }
 
@@ -195,6 +202,7 @@ export class ForgeCADRendererClient {
       `/models/${encodeURIComponent(modelId)}` +
       `/revisions/${encodeURIComponent(revisionId)}/tessellate`;
     const payload = await this.post<{ tessellated_scene: TessellatedScene }>(path, {});
+    this.stopEmptyPolling();
     this.currentModelId = modelId;
     this.currentRevisionId = revisionId;
     await this.adapter.renderRevision({
@@ -208,6 +216,29 @@ export class ForgeCADRendererClient {
     return payload;
   }
 
+  startEmptyPolling(): void {
+    if (this.emptyPollTimer !== null) {
+      return;
+    }
+    this.emptyPollTimer = window.setInterval(() => {
+      if (this.currentModelId && this.currentRevisionId) {
+        this.stopEmptyPolling();
+        return;
+      }
+      this.renderActiveRevision().catch((error: unknown) => {
+        this.logger.error("ForgeCAD active-model poll failed", error);
+      });
+    }, 1000);
+  }
+
+  stopEmptyPolling(): void {
+    if (this.emptyPollTimer === null) {
+      return;
+    }
+    window.clearInterval(this.emptyPollTimer);
+    this.emptyPollTimer = null;
+  }
+
   connectEvents(): void {
     const url = new URL(this.serviceBaseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -217,9 +248,12 @@ export class ForgeCADRendererClient {
     }
     this.websocket = this.websocketFactory(url.toString());
     this.websocket.addEventListener("message", (event: MessageEvent<string>) => {
-      this.handleEvent(JSON.parse(event.data) as ServiceEvent).catch((error: unknown) => {
-        this.logger.error("ForgeCAD renderer event failed", error);
-      });
+      const serviceEvent = JSON.parse(event.data) as ServiceEvent;
+      this.eventQueue = this.eventQueue
+        .then(() => this.handleEvent(serviceEvent))
+        .catch((error: unknown) => {
+          this.logger.error("ForgeCAD renderer event failed", error);
+        });
     });
     this.websocket.addEventListener("close", () => {
       this.websocket = null;
@@ -231,6 +265,7 @@ export class ForgeCADRendererClient {
       return;
     }
     if (event.event_type === "revision.created" && event.model_id && event.revision_id) {
+      this.stopEmptyPolling();
       await this.renderRevision(event.model_id, event.revision_id);
       return;
     }

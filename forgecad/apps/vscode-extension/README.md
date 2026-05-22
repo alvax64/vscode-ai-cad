@@ -17,7 +17,13 @@ metadata, revisions, tessellation, or exports.
 
 Use this exact flow when running the extension from source:
 
-1. Open the extension folder itself in VS Code:
+1. Open either the repository root or the extension folder itself in VS Code:
+
+   ```bash
+   code /home/alvax/yo/vscode-ai-cad
+   ```
+
+   or
 
    ```bash
    code /home/alvax/yo/vscode-ai-cad/forgecad/apps/vscode-extension
@@ -31,9 +37,11 @@ Use this exact flow when running the extension from source:
    ```
 
 3. Press `F5`, or open **Run and Debug** and choose
-   **Run ForgeCAD Extension**. This uses `.vscode/launch.json`, runs
-   `npm: compile:all`, and opens a new isolated **Extension Development Host**
-   window with a separate user-data directory and extension directory.
+   **Run ForgeCAD Extension**. From the repository root this uses
+   `/home/alvax/yo/vscode-ai-cad/.vscode/launch.json`; from the extension
+   folder this uses `forgecad/apps/vscode-extension/.vscode/launch.json`. Both
+   launch configs point VS Code at `forgecad/apps/vscode-extension`, build the
+   extension, and open a new isolated **Extension Development Host** window.
 
 4. In the Extension Development Host, open a normal workspace folder, then trust
    it when VS Code asks. Local service startup is blocked in untrusted

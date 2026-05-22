@@ -14,5 +14,8 @@
   "exports": {
     ".": "./dist/forgecad-renderer-client.js",
     "./legacy-viewer-adapter": "./dist/legacy-viewer-adapter.js"
+  },
+  "dependencies": {
+    "three-cad-viewer": "^4.3.9"
   }
 }

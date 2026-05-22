@@ -61,9 +61,16 @@ export class ForgeCADViewerPanel {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.rendererRoot, "dist", "forgecad-renderer-client.js")
     );
+    const cadViewerScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.rendererRoot, "three-cad-viewer", "dist", "three-cad-viewer.esm.js")
+    );
+    const cadViewerStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.rendererRoot, "three-cad-viewer", "dist", "three-cad-viewer.css")
+    );
     const serviceBaseUrl = JSON.stringify(status.baseUrl);
     const sessionId = JSON.stringify(status.sessionId);
     const authToken = JSON.stringify(status.authToken);
+    const cadViewerModuleUrl = JSON.stringify(String(cadViewerScriptUri));
     const connectSrc = connectSources(status.baseUrl).join(" ");
     const csp = [
       "default-src 'none'",
@@ -82,6 +89,7 @@ export class ForgeCADViewerPanel {
       content="${escapeHtml(csp)}"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="${cadViewerStyleUri}" />
     <title>ForgeCAD Viewer</title>
     <style>
       html, body, #cad_viewer {
@@ -91,6 +99,23 @@ export class ForgeCADViewerPanel {
         padding: 0;
         overflow: hidden;
         background: #121316;
+      }
+      #cad_viewer {
+        position: fixed;
+        inset: 0;
+        min-width: 0;
+        min-height: 0;
+      }
+      #cad_viewer .tcv_cad_viewer {
+        width: 100% !important;
+        height: 100% !important;
+        margin: 0 !important;
+        max-width: 100%;
+        max-height: 100%;
+      }
+      #cad_viewer .tcv_cad_body {
+        min-width: 0;
+        min-height: 0;
       }
       .status {
         position: fixed;
@@ -107,13 +132,18 @@ export class ForgeCADViewerPanel {
     <div id="cad_viewer"></div>
     <div class="status">service ${escapeHtml(status.baseUrl)} · ${escapeHtml(status.sessionId)}</div>
     <script nonce="${nonce}" type="module">
-      import { createServiceDrivenRenderer } from "${scriptUri}";
+      import { createServiceDrivenRenderer, createThreeCadViewerAdapter } from "${scriptUri}";
 
+      const mount = document.getElementById("cad_viewer");
       const renderer = createServiceDrivenRenderer({
         serviceBaseUrl: ${serviceBaseUrl},
         sessionId: ${sessionId},
         authToken: ${authToken},
-        mount: document.getElementById("cad_viewer")
+        mount,
+        adapter: createThreeCadViewerAdapter({
+          mount,
+          moduleUrl: ${cadViewerModuleUrl}
+        })
       });
       renderer.start().catch((error) => {
         document.body.textContent = error.message;

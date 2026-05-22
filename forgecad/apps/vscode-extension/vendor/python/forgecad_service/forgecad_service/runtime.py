@@ -6,12 +6,69 @@ import importlib
 import importlib.util
 import math
 import os
+import sys
 import traceback
 from dataclasses import dataclass
 from typing import Any
 
+from forgecad_core.display import (
+    AnalysisTool,
+    Camera,
+    Collapse,
+    DisplayContext,
+    DisplayRequest,
+    Render,
+    StudioBackground,
+    StudioEnvironment,
+    StudioTextureMapping,
+    StudioToneMapping,
+    UiTab,
+    display_context,
+)
 from forgecad_core.errors import ForgeCADError
 from forgecad_core.serialization import to_json_compatible
+
+TESSELLATION_DEFAULTS: dict[str, Any] = {
+    "ambient_intensity": 1.0,
+    "angular_tolerance": 0.2,
+    "axes": False,
+    "axes0": True,
+    "black_edges": False,
+    "center_grid": False,
+    "collapse": 1,
+    "control": "trackball",
+    "default_color": "#e8b024",
+    "default_edgecolor": "#707070",
+    "default_facecolor": "Violet",
+    "default_opacity": 0.5,
+    "default_thickedgecolor": "MediumOrchid",
+    "default_vertexcolor": "MediumOrchid",
+    "deviation": 0.1,
+    "direct_intensity": 1.1,
+    "edge_accuracy": 0.001,
+    "explode": False,
+    "grid": False,
+    "grid_font_size": 12,
+    "helper_scale": 1.0,
+    "metalness": 0.3,
+    "ortho": True,
+    "pan_speed": 1,
+    "render_edges": True,
+    "render_joints": False,
+    "render_mates": False,
+    "render_normals": False,
+    "reset_camera": "reset",
+    "rotate_speed": 1,
+    "roughness": 0.65,
+    "show_parent": False,
+    "show_sketch_local": True,
+    "ticks": 5,
+    "timeit": False,
+    "transparent": False,
+    "tree_width": 240,
+    "up": "Z",
+    "zoom_speed": 1,
+}
 
 
 @dataclass(slots=True)
@@ -46,24 +103,19 @@ class GeometryRuntime:
         include_tessellation: bool = True,
     ) -> EvaluationResult:
         cq = self._optional_import("cadquery")
-        if cq is None:
-            raise self._dependency_error("cadquery")
-
-        namespace: dict[str, Any] = {
-            "cq": cq,
-            "cadquery": cq,
-            "__name__": "__forgecad_script__",
-        }
+        namespace = self._script_namespace(cq)
 
         build123d = self._optional_import("build123d")
         if build123d is not None:
             namespace["bd"] = build123d
             namespace["build123d"] = build123d
 
+        display = DisplayContext()
         try:
             old_no_show = os.environ.get("CADQUERY_NO_SHOW")
             os.environ["CADQUERY_NO_SHOW"] = "1"
-            exec(script, namespace)  # pylint: disable=exec-used
+            with display_context(display):
+                exec(script, namespace)  # pylint: disable=exec-used
         except Exception as exc:
             raise ForgeCADError(
                 "EVALUATION_FAILED",
@@ -77,10 +129,18 @@ class GeometryRuntime:
             else:
                 os.environ["CADQUERY_NO_SHOW"] = old_no_show
 
+        display_request = display.last_model_request()
+        if display_request is not None:
+            return self._display_request_result(
+                display_request,
+                fallback_name=name,
+                include_tessellation=include_tessellation,
+            )
+
         if "result" not in namespace:
             raise ForgeCADError(
                 "RESULT_MISSING",
-                "CAD script must define a variable named 'result'",
+                "CAD script must define a variable named 'result' or call show(...)",
                 recoverable=True,
             )
 
@@ -93,6 +153,90 @@ class GeometryRuntime:
         return EvaluationResult(
             name=name,
             handle=result,
+            metadata=metadata,
+            scene_tree=scene_tree,
+            tessellated_scene=tessellated_scene,
+            warnings=[],
+        )
+
+    def _script_namespace(self, cq: Any | None) -> dict[str, Any]:
+        from forgecad_core import display as forgecad_display
+
+        self._install_script_api_modules(forgecad_display)
+        namespace: dict[str, Any] = {
+            "__name__": "__forgecad_script__",
+            "show": forgecad_display.show,
+            "show_object": forgecad_display.show_object,
+            "push_object": forgecad_display.push_object,
+            "remove_object": forgecad_display.remove_object,
+            "show_objects": forgecad_display.show_objects,
+            "show_all": forgecad_display.show_all,
+            "show_clear": forgecad_display.show_clear,
+            "reset_show": forgecad_display.reset_show,
+            "set_viewer_config": forgecad_display.set_viewer_config,
+            "AnalysisTool": AnalysisTool,
+            "Camera": Camera,
+            "Collapse": Collapse,
+            "Render": Render,
+            "StudioBackground": StudioBackground,
+            "StudioEnvironment": StudioEnvironment,
+            "StudioTextureMapping": StudioTextureMapping,
+            "StudioToneMapping": StudioToneMapping,
+            "UiTab": UiTab,
+        }
+        if cq is not None:
+            namespace["cq"] = cq
+            namespace["cadquery"] = cq
+        return namespace
+
+    def _install_script_api_modules(self, forgecad_display: Any) -> None:
+        exports = {
+            name: getattr(forgecad_display, name)
+            for name in getattr(forgecad_display, "__all__", [])
+            if hasattr(forgecad_display, name)
+        }
+        forgecad_module = self._import_or_existing_module("forgecad")
+        ocp_module = self._import_or_existing_module("ocp_vscode")
+        for module_name in ("ocp_vscode.show", "ocp_vscode.config"):
+            module = self._import_or_existing_module(module_name)
+            for name, value in exports.items():
+                setattr(module, name, value)
+        for target in (forgecad_module, ocp_module):
+            for name, value in exports.items():
+                setattr(target, name, value)
+
+    def _import_or_existing_module(self, module_name: str) -> Any:
+        module = sys.modules.get(module_name)
+        if module is not None and (module_name != "ocp_vscode" or hasattr(module, "__path__")):
+            return module
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+        return importlib.import_module(module_name)
+
+    def _display_request_result(
+        self,
+        request: DisplayRequest,
+        *,
+        fallback_name: str,
+        include_tessellation: bool,
+    ) -> EvaluationResult:
+        model_name = request.model_name or fallback_name
+        handle: Any
+        if len(request.objects) == 1:
+            handle = self._object_handle_from_display_payload(request.objects[0])
+        else:
+            handle = [self._object_handle_from_display_payload(obj) for obj in request.objects]
+
+        metadata = self._metadata_from_display_request(request, handle)
+        scene_tree = self._scene_tree_from_display_request(request, name=model_name)
+        tessellated_scene = (
+            self._tessellate_display_request(request)
+            if include_tessellation
+            else None
+        )
+        return EvaluationResult(
+            name=model_name,
+            handle=handle,
             metadata=metadata,
             scene_tree=scene_tree,
             tessellated_scene=tessellated_scene,
@@ -169,19 +313,13 @@ class GeometryRuntime:
         }
 
     def tessellate(self, obj: Any) -> dict[str, Any]:
+        accepted = self._accepted_tessellated_scene(obj)
+        if accepted is not None:
+            return accepted
         try:
             old_pytest = os.environ.get("OCP_VSCODE_PYTEST")
             os.environ["OCP_VSCODE_PYTEST"] = "1"
-            from ocp_vscode.show import _convert
-
-            converted, mapping = _convert(obj, progress=None)
-            return to_json_compatible({
-                "instances": converted[0],
-                "shapes": converted[1],
-                "config": converted[2],
-                "count": converted[3],
-                "mapping": mapping,
-            })
+            return self._legacy_ocp_tessellate([obj], names=None, config={})
         except Exception as exc:
             raise ForgeCADError(
                 "TESSELLATION_FAILED",
@@ -194,6 +332,292 @@ class GeometryRuntime:
                 os.environ.pop("OCP_VSCODE_PYTEST", None)
             else:
                 os.environ["OCP_VSCODE_PYTEST"] = old_pytest
+
+    def _tessellate_display_request(self, request: DisplayRequest) -> dict[str, Any]:
+        accepted = self._accepted_tessellated_scene_from_request(request)
+        if accepted is not None:
+            return accepted
+        try:
+            old_pytest = os.environ.get("OCP_VSCODE_PYTEST")
+            os.environ["OCP_VSCODE_PYTEST"] = "1"
+            return self._legacy_ocp_tessellate(
+                request.objects,
+                names=request.names,
+                colors=request.colors,
+                alphas=request.alphas,
+                modes=request.modes,
+                materials=request.materials,
+                config=request.config,
+            )
+        except Exception as exc:
+            raise ForgeCADError(
+                "TESSELLATION_FAILED",
+                str(exc),
+                details={"traceback": traceback.format_exc()},
+                recoverable=True,
+            ) from exc
+        finally:
+            if old_pytest is None:
+                os.environ.pop("OCP_VSCODE_PYTEST", None)
+            else:
+                os.environ["OCP_VSCODE_PYTEST"] = old_pytest
+
+    def _legacy_ocp_tessellate(
+        self,
+        objects: list[Any],
+        *,
+        names: list[str | None] | None,
+        colors: list[Any | None] | None = None,
+        alphas: list[float | None] | None = None,
+        modes: list[str | None] | None = None,
+        materials: list[Any | None] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            from ocp_tessellate.convert import (
+                combined_bb,
+                get_normal_len,
+                tessellate_group,
+                to_ocpgroup,
+            )
+            from ocp_tessellate.utils import Color
+        except Exception as exc:
+            raise self._dependency_error("ocp_tessellate") from exc
+
+        config = self._tessellation_config(config)
+        color_values = self._none_if_all_none(colors)
+        color_objects = (
+            None
+            if color_values is None
+            else [None if color is None else Color(color) for color in color_values]
+        )
+        alpha_values = self._none_if_all_none(alphas)
+        material_values = self._none_if_all_none(materials)
+        mode_values = self._none_if_all_none(modes)
+        part_group, instances = to_ocpgroup(
+            *objects,
+            names=self._none_if_all_none(names),
+            colors=color_objects,
+            alphas=alpha_values,
+            materials=material_values,
+            modes=[self._render_mode_state(mode) for mode in mode_values] if mode_values else None,
+            render_mates=config.get("render_mates", False),
+            render_joints=config.get("render_joints", False),
+            helper_scale=config.get("helper_scale", 1.0),
+            default_color=config.get("default_color"),
+            show_parent=config.get("show_parent", False),
+            show_sketch_local=config.get("show_sketch_local", True),
+            progress=None,
+            debug=config.get("debug", False),
+        )
+        instances, shapes, mapping = tessellate_group(
+            part_group,
+            instances,
+            config,
+            None,
+            config.get("timeit"),
+        )
+        shapes["bb"] = self._combined_bounding_box(combined_bb(shapes))
+        config["render_edges"] = True
+        config["normal_len"] = get_normal_len(
+            bool(config.get("render_normals")),
+            shapes,
+            config.get("deviation", 0.1),
+        )
+        return to_json_compatible(
+            {
+                "instances": instances,
+                "shapes": shapes,
+                "config": config,
+                "count": part_group.count_shapes(),
+                "mapping": mapping,
+            }
+        )
+
+    def _render_mode_state(self, mode: str | None) -> tuple[int, int] | None:
+        return {
+            "all": (1, 1),
+            "edges": (0, 1),
+            "faces": (1, 0),
+            "none": (0, 0),
+        }.get(mode or "")
+
+    def _metadata_from_display_request(
+        self,
+        request: DisplayRequest,
+        handle: Any,
+    ) -> dict[str, Any]:
+        accepted = self._accepted_metadata_from_request(request)
+        if accepted is not None:
+            return accepted
+        if len(request.objects) == 1:
+            return self.compute_metadata(handle)
+        metadata = self.compute_metadata(handle)
+        metadata["object_count"] = len(request.objects)
+        metadata["display_names"] = list(request.names)
+        return metadata
+
+    def _scene_tree_from_display_request(
+        self,
+        request: DisplayRequest,
+        *,
+        name: str,
+    ) -> dict[str, Any]:
+        accepted = self._accepted_scene_tree_from_request(request)
+        if accepted is not None:
+            return accepted
+        return {
+            "id": "/result",
+            "name": name,
+            "type": "DisplayGroup" if len(request.objects) > 1 else type(request.objects[0]).__name__,
+            "children": [
+                {
+                    "id": f"/result/{index}",
+                    "name": item_name or f"Object {index + 1}",
+                    "type": type(obj).__name__,
+                    "children": [],
+                    "render_mode": request.modes[index] if index < len(request.modes) else None,
+                }
+                for index, (item_name, obj) in enumerate(zip(request.names, request.objects))
+            ],
+        }
+
+    def _object_handle_from_display_payload(self, obj: Any) -> Any:
+        if isinstance(obj, dict) and "handle" in obj:
+            return obj["handle"]
+        return obj
+
+    def _accepted_tessellated_scene_from_request(
+        self,
+        request: DisplayRequest,
+    ) -> dict[str, Any] | None:
+        if len(request.objects) != 1:
+            return None
+        return self._accepted_tessellated_scene(request.objects[0], config=request.config)
+
+    def _accepted_tessellated_scene(
+        self,
+        obj: Any,
+        *,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(obj, dict):
+            return None
+        if "tessellated_scene" in obj and isinstance(obj["tessellated_scene"], dict):
+            scene = dict(obj["tessellated_scene"])
+        elif "instances" in obj or "shapes" in obj:
+            scene = dict(obj)
+        else:
+            return None
+        if config:
+            scene_config = dict(scene.get("config") or {})
+            scene_config.update(config)
+            scene["config"] = scene_config
+        return to_json_compatible(scene)
+
+    def _accepted_metadata_from_request(
+        self,
+        request: DisplayRequest,
+    ) -> dict[str, Any] | None:
+        if len(request.objects) != 1:
+            return None
+        obj = request.objects[0]
+        if isinstance(obj, dict) and isinstance(obj.get("metadata"), dict):
+            return to_json_compatible(obj["metadata"])
+        scene = self._accepted_tessellated_scene(obj)
+        if scene is None:
+            return None
+        return self._metadata_from_tessellated_scene(scene)
+
+    def _accepted_scene_tree_from_request(
+        self,
+        request: DisplayRequest,
+    ) -> dict[str, Any] | None:
+        if len(request.objects) != 1:
+            return None
+        obj = request.objects[0]
+        if isinstance(obj, dict) and isinstance(obj.get("scene_tree"), dict):
+            return to_json_compatible(obj["scene_tree"])
+        return None
+
+    def _metadata_from_tessellated_scene(self, scene: dict[str, Any]) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "volume": None,
+            "surface_area": None,
+            "bounding_box": None,
+            "face_count": None,
+            "edge_count": None,
+            "solid_count": None,
+            "shell_count": None,
+            "is_valid": None,
+        }
+        bb = (scene.get("shapes") or {}).get("bb") if isinstance(scene.get("shapes"), dict) else None
+        if isinstance(bb, dict):
+            metadata["bounding_box"] = self._metadata_bbox_from_legacy_bb(bb)
+        count = scene.get("count")
+        if isinstance(count, int):
+            metadata["shape_count"] = count
+        return metadata
+
+    def _metadata_bbox_from_legacy_bb(self, bb: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            xmin = float(bb["xmin"])
+            ymin = float(bb["ymin"])
+            zmin = float(bb["zmin"])
+            xmax = float(bb["xmax"])
+            ymax = float(bb["ymax"])
+            zmax = float(bb["zmax"])
+        except Exception:
+            return None
+        return {
+            "min": [xmin, ymin, zmin],
+            "max": [xmax, ymax, zmax],
+            "extents": [xmax - xmin, ymax - ymin, zmax - zmin],
+        }
+
+    def _combined_bounding_box(self, bb: Any) -> dict[str, float]:
+        if bb is None:
+            return {
+                "xmin": -1e-6,
+                "ymin": -1e-6,
+                "zmin": -1e-6,
+                "xmax": 1e-6,
+                "ymax": 1e-6,
+                "zmax": 1e-6,
+            }
+        if hasattr(bb, "to_dict"):
+            return bb.to_dict()
+        return dict(bb)
+
+    def _tessellation_config(self, config: dict[str, Any] | None) -> dict[str, Any]:
+        merged = dict(TESSELLATION_DEFAULTS)
+        for key, value in self._without_none_values(config or {}).items():
+            if value is not None:
+                merged[key] = value
+        if isinstance(merged.get("grid"), bool):
+            merged["grid"] = [merged["grid"]] * 3
+        for key, default in TESSELLATION_DEFAULTS.items():
+            if merged.get(key) is None:
+                merged[key] = default
+        return merged
+
+    def _none_if_all_none(self, values: list[Any | None] | None) -> list[Any | None] | None:
+        if values is None:
+            return None
+        return None if all(value is None for value in values) else values
+
+    def _without_none_values(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: self._without_none_values(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, list):
+            return [self._without_none_values(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._without_none_values(item) for item in value)
+        return value
 
     def export_stl(self, obj: Any, output_path: str) -> dict[str, Any]:
         cq = self._optional_import("cadquery")

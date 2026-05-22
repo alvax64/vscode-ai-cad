@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import * as os from "os";
 import * as path from "path";
 import { spawn, type ChildProcessByStdio } from "child_process";
 import { Readable } from "stream";
@@ -84,6 +85,7 @@ export class ForgeCADServiceManager {
       PYTHONPATH: [assets.corePath, assets.servicePath, process.env.PYTHONPATH]
         .filter(Boolean)
         .join(path.delimiter),
+      MPLCONFIGDIR: process.env.MPLCONFIGDIR || path.join(os.tmpdir(), "forgecad-matplotlib"),
       FORGECAD_WORKSPACE_TRUSTED: String(vscode.workspace.isTrusted),
       FORGECAD_WORKSPACE_ROOT: this.workspaceRoot() || ""
     };
@@ -94,7 +96,7 @@ export class ForgeCADServiceManager {
         .join(" ")} <token>`
     );
     const childProcess = spawn(pythonPath, args, {
-      cwd: assets.forgecadRoot,
+      cwd: this.workspaceRoot() || assets.forgecadRoot,
       env,
       stdio: ["ignore", "pipe", "pipe"]
     });

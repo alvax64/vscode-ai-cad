@@ -118,6 +118,10 @@ function requestJson<T>(
               serviceErrorMessage(parsed) || response.statusMessage || "Service error";
             const err = new Error(message) as Error & { response?: unknown };
             err.response = parsed;
+            const details = serviceErrorDetails(parsed);
+            if (details) {
+              err.stack = `${err.stack || message}\n\nForgeCAD service response:\n${details}`;
+            }
             reject(err);
             return;
           }
@@ -146,7 +150,29 @@ function serviceErrorMessage(value: unknown): string | null {
     "message" in value.error &&
     typeof value.error.message === "string"
   ) {
-    return value.error.message;
+    const code =
+      "code" in value.error && typeof value.error.code === "string"
+        ? value.error.code
+        : null;
+    return code ? `${code}: ${value.error.message}` : value.error.message;
+  }
+  return null;
+}
+
+function serviceErrorDetails(value: unknown): string | null {
+  if (
+    value &&
+    typeof value === "object" &&
+    "error" in value &&
+    value.error &&
+    typeof value.error === "object" &&
+    "details" in value.error
+  ) {
+    try {
+      return JSON.stringify(value.error.details, null, 2);
+    } catch {
+      return String(value.error.details);
+    }
   }
   return null;
 }
